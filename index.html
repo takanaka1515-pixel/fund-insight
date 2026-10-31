@@ -16,7 +16,7 @@
 </style>
 </head>
 <body>
-<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.8</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
+<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.9</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
 <nav class="tabbar" id="tabs" aria-label="メインメニュー"></nav>
 <div id="modal-root"></div>
 <script>
@@ -112,7 +112,7 @@ function saveNewFund(){const name=$('#new-fund-name').value.trim();if(!name){ale
 function exportData(){const blob=new Blob([JSON.stringify({format:'fund-insight-v02',exported:new Date().toISOString(),state},null,2)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='投信の中身_backup_'+new Date().toLocaleDateString('sv-SE')+'.json';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
 async function importData(ev){const file=ev.target.files?.[0];if(!file)return;try{const obj=JSON.parse(await file.text()),d=obj.state||obj;if(!Array.isArray(d.assets)||!Array.isArray(d.funds)||!Array.isArray(d.dividends)||!Array.isArray(d.snapshots))throw Error('バックアップの形式が違います');if(!confirm(`既存データをすべて上書きして復元しますか？\n保有明細 ${d.assets.length} 件`))return;state=deep(d);persist();render();alert('復元しました')}catch(e){alert('復元できませんでした：'+e.message)}}
 function clearAssets(){if(!confirm('保有資産と分配金の記録をすべて削除しますか？\n組入銘柄データは残ります。'))return;if(!confirm('取り消しできません。バックアップは保存しましたか？'))return;state.assets=[];state.dividends=[];state.snapshots=[];persist();render()}
-const aliases=[['invesco',/インベスコ|世界厳選株式|世界厳選/i],['wcm',/WCM|世界成長株/i],['the5g',/次世代通信関連|次世代通信|THE\s*5G|5G\s*\(?予想/i],['563a',/563A|NASDAQ\s*100.{0,15}カバード/i],['435a',/435A/i],['divdevelop',/先進国.{0,12}好配当/i],['sp500',/S\s*&\s*P\s*500|S&P500|米国株式.{0,12}500/i],['allcountry',/オール.?カントリー|オルカン|全世界株式/i],['bull43',/4[.．]3\s*倍|日本株4[.．]3/i]];
+const aliases=[['invesco',/インベスコ|世界厳選株式|世界厳選/i],['wcm',/WCM|世界成長株/i],['the5g',/次世代通信関連|次世代通信|THE\s*5G|5G\s*\(?予想/i],['563a',/563A|GX\s*N\s*A\s*S\s*1\s*0\s*0.{0,22}カバ|GX\s*NASDAQ\s*100.{0,22}カバ|NASDAQ\s*100.{0,22}カバード/i],['435a',/435A/i],['divdevelop',/先進国.{0,12}好配当/i],['sp500',/S\s*&\s*P\s*500|S&P500|米国株式.{0,12}500/i],['allcountry',/オール.?カントリー|オルカン|全世界株式/i],['bull43',/4[.．]3\s*倍|日本株4[.．]3/i]];
 function identify(line){const source=String(line||'').normalize('NFKC');const compact=source.replace(/[\s　]+/g,'');for(const [id,reg] of aliases)if(reg.test(source)||reg.test(compact))return id;return ''}
 // 画面表示のラベルと数字を結びつける。カンマがピリオドと認識されるOCRにも対応。
 function numberTokens(line){
@@ -240,6 +240,25 @@ function candidateConfidence(c){
  if(c.derived)score-=2;
  return score;
 }
+// 松井のOCRで1,006,764→6,764、1,033,892→33,892のように
+// 先頭の「1,00」等が欠落するケースを、実際に写っている損益率で検算。
+// 複数候補がある・％が不明な場合は絶対に推測補完しない。
+function restoreTruncatedMatsuiAmount(value,cost,profit,percent){
+ if(![value,cost,profit,percent].every(x=>x!==null&&Number.isFinite(Number(x))))return null;
+ const v=Number(value),c=Number(cost),p=Number(profit),r=Number(percent);
+ if(v<1||c<1||v>=100000||c>=100000||Math.abs(p)<1000||Math.abs(r)<.1)return null;
+ if(Math.abs((v-c)-p)>Math.max(2,Math.abs(p)*.001))return null;
+ if(Math.abs(p/c*100-r)<Math.max(.22,Math.abs(r)*.07))return null; // すでに値が合う場合は変更不要
+ const matches=[];
+ for(const missing of [100000,1000000,10000000])for(let n=1;n<=9;n++){
+  const shift=missing*n,correctedCost=c+shift,correctedValue=v+shift;
+  if(correctedValue>200000000||correctedCost>200000000)continue;
+  const rate=p/correctedCost*100;
+  // OCRで損益率が小数1桁に丸められた場合を許容（±0.09％まで）。
+  if(Math.abs(rate-r)<=.09)matches.push({value:correctedValue,cost:correctedCost,profit:p,rate,shift});
+ }
+ return matches.length===1?matches[0]:null;
+}
 function inferBroker(raw,defaultBroker){if(/member\.rakuten-sec\.co\.jp|rakuten-sec|楽天証券|楽天証券株式会社|保有\s*商品\s*詳細|NISAつみたて投資枠/i.test(raw))return'rakuten';if(/matsui|松井証券|残高照会|投信評価額合計/i.test(raw))return'matsui';return defaultBroker;}
 function inferBucket(raw,defaultBucket){if(/NISA\s*(つみたて|成長|口座)|つみたて投資枠|成長投資枠/i.test(raw))return'nisa';return defaultBucket;}
 function bestRecognizedName(text,id){
@@ -297,15 +316,26 @@ function candidateFromText(text,settings={}){
      stockHint=' 取得額と損益の差額から評価額を推算（要確認）。';
     }
    }
+   // 松井の先頭桁欠落を、同じ銘柄の評価額・損益・損益率から検出・補完する。
+   // 補完後もチェックは外したままにして、本人が必ず画像と照合する。
+   let restoredNote='';
+   const rawPercent=profitPercentInBlock(block);
+   if(broker==='matsui'&&rawPercent!==null){
+    const restored=restoreTruncatedMatsuiAmount(value,cost,profit,rawPercent);
+    if(restored){
+     value=restored.value;cost=restored.cost;
+     restoredNote=' 【先頭桁の欠落を損益率で補正】元画像と必ず照合してください。';
+    }
+   }
    // OCRが評価額だけ読めなくても、取得額と評価損益の両方が判明すれば計算できる。
-   let derived=false;
+   let derived=!!restoredNote;
    if(value===null&&cost!==null&&profit!==null&&cost+profit>0){value=cost+profit;derived=true;}
    if(cost===null&&value!==null&&profit!==null&&value-profit>=0){cost=value-profit;}
    if(stockHint&&!corroborated)derived=true;
    let detail=value===null?'評価額が読めませんでした。画像を見て入力してください。':derived?'評価額＝取得額＋評価損益から計算。元の画像との照合が必要です。':'評価額をOCRから抽出。元の画像で照合してください。';
    if(cost!==null&&cost>=0)detail+=' 取得額 '+cost.toLocaleString('ja-JP')+'円。';
    if(profit!==null)detail+=' 評価損益 '+profit.toLocaleString('ja-JP')+'円。';
-   detail+=stockHint;
+   detail+=stockHint+restoredNote;
    // この銘柄のブロック自身に区分があれば、その判定を最優先する。
    const blockRaw=block.join(' '),blockBucket=/NISA|つみたて投資枠|成長投資枠/i.test(blockRaw)?'nisa':/口座区分.{0,25}特定|特定口座/i.test(blockRaw)?settings.bucket||bucket:bucket;
    // 買付・解約ボタンの数字や別銘柄の評価額を誤記録しないよう、高額な矛盾は確認待ち。
@@ -325,7 +355,18 @@ function mergeCandidates(items){
  for(const x of items){
   const k=[x.fundId,x.broker,x.bucket,x.bucket==='nisa'?(x.slot||'unspecified'):''].join('|');
   if(!map.has(k)){map.set(k,x);continue;}
-  const prev=map.get(k),p=candidateConfidence(prev),n=candidateConfidence(x);
+  const prev=map.get(k);
+  // OCR領域ごとに％の読み取り状況が違う場合も、見つかった％を全候補で共有して照合。
+  const commonPercent=[prev.percent,x.percent].find(v=>v!==null&&v!==undefined&&Number.isFinite(Number(v)));
+  function quality(c){
+   let score=candidateConfidence(c);
+   if(commonPercent!==undefined&&c.cost!==''&&Number(c.cost)>0&&c.profit!==null&&c.profit!==undefined){
+    const diff=Math.abs(Number(c.profit)/Number(c.cost)*100-Number(commonPercent));
+    score+=diff<=.15?12:-30;
+   }
+   return score;
+  }
+  const p=quality(prev),n=quality(x);
   // 損益率との整合性が高い読み取りを優先。先頭桁の欠落値は採用しない。
   if(n>p){
     map.set(k,x);
@@ -459,7 +500,76 @@ function historyRowAmount(lines,index){
  }
  return null;
 }
+// 楽天証券「入出金・振替 ＞ 配当金・分配金・利金」には「再投資」等の
+// 取引区分が無い。画面見出し・銘柄・入金日・受取金額を一組にして解析する。
+// 税引前の配当金額、税額、数量、単価は受取金額として採用しない。
+function parseRakutenDividendText(raw){
+ const normalized=normalizeDivText(raw),lines=normalized.split(/\n/).map(x=>x.trim()).filter(Boolean);
+ const flat=ocrKey(raw);
+ const isHistory=/配当金.{0,8}分配金|分配金.{0,8}利金|入金日.{0,8}受渡日/.test(flat);
+ const hasPaymentLabel=/受取金額|受取額|配当金額.?税引前/.test(flat);
+ if(!isHistory||!hasPaymentLabel)return [];
+ const id=identify(raw);
+ // 銘柄も日付も判定できないのに金額だけ拾うことは禁止。
+ const date=findHistoryDate(raw);
+ if(!id||!date)return [];
+ const moneyIn=s=>numberTokens(s).filter(x=>x.v>0&&x.v<=100000000&&(!/株|口|単価|株価|%|件中/.test(s)));
+ function fieldMoney(re){
+  for(let i=0;i<lines.length;i++){
+   if(!re.test(ocrKey(lines[i])))continue;
+   const same=lines[i].replace(/^.*?(?:配当金額.{0,4}税引前|国内税額合計|所得税|受取金額)\s*[:：]?/,'');
+   const candidates=[same,...lines.slice(i+1,i+4)];
+   for(const q of candidates){
+    if(/数量|単価|株価|取引明細|留意事項|受取金額|配当金額|税額|受渡日|入金日/.test(q)&&q!==same)break;
+    const v=moneyIn(q).find(x=>/円/.test(q.slice(x.pos+x.raw.length,x.pos+x.raw.length+6)))||moneyIn(q)[0];
+    if(v)return v.v;
+    // 国内税額660円のような3桁以下は汎用numberTokensから除外されている。
+    // ここでは「税額」欄と特定できた場合だけ小額を許可。
+    const small=q.normalize('NFKC').match(/(?:^|[^\d])(\d{1,3})\s*円/);
+    if(small&&/国内税額合計|源泉徴収税額/.test(String(re)))return Number(small[1]);
+   }
+  }
+  return null;
+ }
+ const gross=fieldMoney(/配当金額.*税引前|税引前.*配当金額/);
+ const tax=fieldMoney(/国内税額合計|源泉徴収税額/);
+ let paid=null,source='';
+ // 1. 563A等の銘柄コードの下の、数量・単価の前にある金額は「受取金額」。
+ for(let i=0;i<lines.length;i++){
+  const a=ocrKey(lines[i]);
+  if(!identify(lines[i])&&!/(?:563a|435a)/i.test(a))continue;
+  for(const q of lines.slice(i+1,i+7)){
+   if(/数量|単価|株価|配当金額|税額|取引明細|留意事項|株\s*\/\s*口/.test(q))break;
+   const valid=moneyIn(q).filter(x=>x.v>=1000);
+   if(valid.length){paid=valid[0].v;source='銘柄明細の受取金額';break;}
+  }
+  if(paid!==null)break;
+ }
+ // 2. 金額欄が銘柄より先にOCRで並んだときは「受取金額」見出しと照合。
+ if(paid===null){
+  const idx=lines.findIndex(x=>/受取金額/.test(ocrKey(x)));
+  if(idx>=0){
+   for(const q of lines.slice(idx+1,Math.min(idx+15,lines.length))){
+    if(/数量|単価|配当金額|税額/.test(q))break;
+    const c=moneyIn(q).find(x=>x.v>=1000&&x.v!==gross);
+    if(c){paid=c.v;source='受取金額の見出し';break;}
+   }
+  }
+ }
+ // 3. 税引前額と税額が取れた場合だけ税引後の金額を計算（確認待ち）。
+ let calculated=false;
+ if(gross!==null&&tax!==null&&gross>tax){
+  const net=gross-tax;
+  if(paid===null){paid=net;calculated=true;source='税引前金額－国内税額から計算';}
+  else if(Math.abs(paid-net)>1){
+   return [{fundId:id,name:bestRecognizedName('',id),broker:'rakuten',bucket:'income',date,amount:'',grossAmount:gross,mode:'receive',kind:'unknown',include:false,origin:'受取金額と税額計算が不一致。元画像で確認してください。',sourceType:'payment-history'}];
+  }
+ }
+ if(paid===null)return [];
+ return [{fundId:id,name:bestRecognizedName('',id),broker:'rakuten',bucket:'income',date,amount:paid,grossAmount:gross,mode:'receive',kind:'unknown',include:!calculated,origin:'楽天証券の配当金・分配金履歴／'+source+'：'+yen(paid)+(gross!==null?'／税引前：'+yen(gross):'')+(tax!==null?'／国内税額：'+yen(tax):'')+'／税務区分は不明（普通分配と推測しない）',sourceType:'payment-history'}];
+}
 function parseDistributionText(raw,broker='matsui'){
+ if(broker==='rakuten'){const payouts=parseRakutenDividendText(raw);if(payouts.length)return payouts;}
  const text=normalizeDivText(raw),lines=text.split(/\n/).map(s=>s.trim()).filter(Boolean),heads=[];
  for(let i=0;i<lines.length;i++){
   if(/【画像\s*\d+】|【拡大再認識】/.test(lines[i]))continue;
@@ -513,13 +623,16 @@ async function readDistributionImages(ev){
    let raw=(await worker.recognize(await prepareImage(file,null,1.8))).data.text||'';
    let cands=parseDistributionText(raw,ui.divImportBroker);
    if(ui.divImportBroker==='matsui'||!cands.length||cands.some(c=>c.amount==='')){
-    // 松井履歴の上半分が認識できても下半分の普通分配金を見逃さないよう常に拡大する。
+    // 履歴の中央・下部を拡大。楽天の配当履歴は銘柄・金額・税額が縦に分かれる。
     const chunks=[];
-    for(const range of [[.08,.52],[.42,.88]]){
+    const areas=ui.divImportBroker==='rakuten'?[[.17,.66],[.34,.91]]:[[.08,.52],[.42,.88]];
+    for(const range of areas){
      const extra=(await worker.recognize(await prepareImage(file,range,2.15))).data.text||'';
      chunks.push(extra);cands.push(...parseDistributionText(extra,ui.divImportBroker));
     }
     raw+='\n【拡大再認識】\n'+chunks.join('\n');
+    // 銘柄と受取額が別の拡大領域にある場合に限り同一画像内で補完する。
+    cands.push(...parseDistributionText(raw,ui.divImportBroker));
    }
    ui.divOCRText+=`【画像 ${i+1}】\n${raw}\n`;
    for(const c of cands){const old=ui.divCandidates.find(x=>x.fundId===c.fundId&&x.broker===c.broker&&x.mode===c.mode&&x.date===c.date);
