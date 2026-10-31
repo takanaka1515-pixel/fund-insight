@@ -16,7 +16,7 @@
 </style>
 </head>
 <body>
-<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.9</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
+<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.10</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
 <nav class="tabbar" id="tabs" aria-label="メインメニュー"></nav>
 <div id="modal-root"></div>
 <script>
@@ -316,6 +316,13 @@ function candidateFromText(text,settings={}){
      stockHint=' 取得額と損益の差額から評価額を推算（要確認）。';
     }
    }
+   // v0.10: 松井証券は取得額が画像に無く「評価額と損益」だけのことが多い。
+   // 先頭桁補正は取得額を必要とするため、先に仮の取得額を求める。
+   // v0.9はこの順番が逆で、6,764円と-27,128円から33,892円を
+   // 後で算出していたため、補正の機会を逃していた。
+   if(cost===null&&value!==null&&profit!==null&&value-profit>=0){
+     cost=value-profit;
+   }
    // 松井の先頭桁欠落を、同じ銘柄の評価額・損益・損益率から検出・補完する。
    // 補完後もチェックは外したままにして、本人が必ず画像と照合する。
    let restoredNote='';
@@ -332,7 +339,7 @@ function candidateFromText(text,settings={}){
    if(value===null&&cost!==null&&profit!==null&&cost+profit>0){value=cost+profit;derived=true;}
    if(cost===null&&value!==null&&profit!==null&&value-profit>=0){cost=value-profit;}
    if(stockHint&&!corroborated)derived=true;
-   let detail=value===null?'評価額が読めませんでした。画像を見て入力してください。':derived?'評価額＝取得額＋評価損益から計算。元の画像との照合が必要です。':'評価額をOCRから抽出。元の画像で照合してください。';
+   let detail=value===null?'評価額が読めませんでした。画像を見て入力してください。':restoredNote?'損益率と損益額から欠けた先頭の桁を補正した参考値。元の画像と必ず照合してください。':derived?'評価額＝取得額＋評価損益から計算。元の画像との照合が必要です。':'評価額をOCRから抽出。元の画像で照合してください。';
    if(cost!==null&&cost>=0)detail+=' 取得額 '+cost.toLocaleString('ja-JP')+'円。';
    if(profit!==null)detail+=' 評価損益 '+profit.toLocaleString('ja-JP')+'円。';
    detail+=stockHint+restoredNote;
