@@ -1,0 +1,39 @@
+name: 投信の中身・公開価格の取得とPages配信
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '15 14 * * 1-5'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: fund-insight-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: $&#123;&#123; steps.deployment.outputs.page_url &#125;&#125;
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get public NAV quotes
+        run: |
+          if [ -f scripts/fetch_prices.py ]; then
+            python3 scripts/fetch_prices.py
+          else
+            python3 fetch_prices.py
+          fi
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
