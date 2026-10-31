@@ -16,7 +16,7 @@
 </style>
 </head>
 <body>
-<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.5</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
+<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.7</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携しておらず、組入情報と評価額は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
 <nav class="tabbar" id="tabs" aria-label="メインメニュー"></nav>
 <div id="modal-root"></div>
 <script>
@@ -41,10 +41,13 @@ const amount=n=>(Number(n)||0).toLocaleString('ja-JP');const signYen=n=>(n>0?'+'
 const opts=(items,value)=>items.map(([v,l])=>`<option value="${cleanHTML(v)}" ${v===value?'selected':''}>${cleanHTML(l)}</option>`).join('');
 const buckets=[['income','高分配'],['nisa','NISA'],['other','その他'],['all','全体']];
 const brokers=[['all','両口座'],['rakuten','楽天証券'],['matsui','松井証券']];
+const slots=[['unspecified','指定なし'],['tsumitate','つみたて投資枠'],['growth','成長投資枠']];
+const slotLabel=a=>a.bucket==='nisa'?' ｜ '+(slots.find(x=>x[0]===(a.slot||'unspecified'))?.[1]||'指定なし'):'';
+function inferSlot(raw){const compact=String(raw||'').normalize('NFKC').replace(/[\s　]/g,'');if(/NISAつみたて投資枠|つみたて投資枠|積立投資枠/.test(compact))return 'tsumitate';if(/NISA成長投資枠|成長投資枠/.test(compact))return 'growth';return 'unspecified';}
 function init(){let dat;try{dat=JSON.parse(localStorage.getItem(KEY))}catch(_){}if(!dat||!Array.isArray(dat.funds)||!Array.isArray(dat.assets))dat={funds:deep(FUND_SEED),assets:[],dividends:[],snapshots:[]};
 try{const old=JSON.parse(localStorage.getItem(OLDKEY));if(!localStorage.getItem(KEY)&&Array.isArray(old)){for(const f of old){const index=dat.funds.findIndex(q=>q.id===f.id);if(index>=0&&f.status?.includes('ユーザーが編集'))dat.funds[index]={...dat.funds[index],...f};}}}catch(_){}
 return dat;}
-let state=init();let ui={tab:'home',bucket:'income',broker:'all',analysis:'company',selectedFund:'',assetEdit:'',divEdit:'',modal:'',ocrText:'',candidates:[],ocrBusy:false,ocrPct:0,ocrStatus:'',ocrPreviews:[],ocrNote:'',year:new Date().getFullYear(),breakdownCategory:'fund',importBroker:'matsui',importBucket:'income'};
+let state=init();let ui={tab:'home',bucket:'income',broker:'all',analysis:'company',selectedFund:'',assetEdit:'',divEdit:'',modal:'',ocrText:'',candidates:[],ocrBusy:false,ocrPct:0,ocrStatus:'',ocrPreviews:[],ocrNote:'',year:new Date().getFullYear(),breakdownCategory:'fund',importBroker:'matsui',importBucket:'income',divOCRText:'',divCandidates:[],divOCRPreviews:[],divOCRNote:'',divImportBroker:'matsui'};
 const $=q=>document.querySelector(q);const $$=q=>Array.from(document.querySelectorAll(q));
 function persist(){try{localStorage.setItem(KEY,JSON.stringify(state));return true}catch(err){alert('端末への保存ができませんでした。ブラウザの保存容量をご確認ください。');return false}}
 const fund=id=>state.funds.find(f=>f.id===id);const fundName=a=>a.name||fund(a.fundId)?.name||'名称未設定';
@@ -57,7 +60,7 @@ function brokerSwitch(){return `<div class="seg narrow">${brokers.map(([v,l])=>`
 function donut(items,totalText,subtitle){const total=items.reduce((s,i)=>s+i.value,0);if(!total)return `<div class="empty"><div class="empty-emoji">◯</div><b>まだ登録データがありません</b><p class="subtext">スクショの読み取りか手入力で、円グラフが自動作成されます。</p><button class="btn secondary" onclick="go('import')">資産を登録する</button></div>`;
 let offset=0;const cols=items.map((item,i)=>{const from=offset;offset+=item.value/total*100;return `${palette[i%palette.length]} ${from.toFixed(4)}% ${offset.toFixed(4)}%`}).join(',');return `<div class="donut-area"><div class="donut" style="background:conic-gradient(${cols})"><div class="donut-center"><span class="fine">${cleanHTML(subtitle||'合計')}</span><strong>${cleanHTML(totalText||yen(total))}</strong></div></div><div class="legend">${items.slice(0,9).map((x,i)=>`<div class="legend-line"><span class="legend-left"><i class="dot" style="background:${palette[i%palette.length]}"></i><span class="name">${cleanHTML(x.name)}</span></span><b>${pct(x.value/total*100)}</b></div>`).join('')}${items.length>9?`<div class="fine">ほか${items.length-9}項目は下の一覧で確認できます</div>`:''}</div></div>`}
 function assetList(list){if(!list.length)return `<div class="empty"><div class="empty-emoji">▤</div><b>登録された資産はありません</b><p class="subtext">保有画面のスクショを取り込むと、ここにファンドごとの評価額を表示します。</p><button class="btn" onclick="go('import')">スクショから登録</button></div>`;
-const total=hash(list);return list.slice().sort((a,b)=>b.value-a.value).map(a=>{const profit=a.cost===null||a.cost===''?null:a.value-a.cost;return `<div class="asset"><div class="asset-main"><div class="asset-icon">${cleanHTML((fundName(a)||'投').slice(0,1))}</div><div class="asset-info"><div class="asset-title">${cleanHTML(fundName(a))}</div><div class="asset-foot">${a.broker==='rakuten'?'楽天':'松井'} ｜ ${a.bucket==='nisa'?'NISA':a.bucket==='income'?'高分配':'その他'}${a.updated?' ｜ '+cleanHTML(a.updated):''}</div></div><div class="asset-val"><b>${yen(a.value)}</b><div class="fine ${profit===null?'':profit>=0?'positive':'negative'}">${profit===null?'損益未登録':signYen(profit)}</div></div></div><div class="row" style="margin-top:8px;padding-left:51px"><div class="fine">構成比 ${total?pct(a.value/total*100):'—'}</div><div class="actions"><button class="linklike" onclick="showFund('${cleanHTML(a.fundId)}')">中身</button><button class="linklike" onclick="assetForm('${cleanHTML(a.id)}')">編集</button><button class="linklike" style="color:#b35c54" onclick="removeAsset('${cleanHTML(a.id)}')">削除</button></div></div></div>`}).join('')}
+const total=hash(list);return list.slice().sort((a,b)=>b.value-a.value).map(a=>{const profit=a.cost===null||a.cost===''?null:a.value-a.cost;return `<div class="asset"><div class="asset-main"><div class="asset-icon">${cleanHTML((fundName(a)||'投').slice(0,1))}</div><div class="asset-info"><div class="asset-title">${cleanHTML(fundName(a))}</div><div class="asset-foot">${a.broker==='rakuten'?'楽天':'松井'} ｜ ${a.bucket==='nisa'?'NISA':a.bucket==='income'?'高分配':'その他'}${slotLabel(a)}${a.updated?' ｜ '+cleanHTML(a.updated):''}</div></div><div class="asset-val"><b>${yen(a.value)}</b><div class="fine ${profit===null?'':profit>=0?'positive':'negative'}">${profit===null?'損益未登録':signYen(profit)}</div></div></div><div class="row" style="margin-top:8px;padding-left:51px"><div class="fine">構成比 ${total?pct(a.value/total*100):'—'}</div><div class="actions"><button class="linklike" onclick="showFund('${cleanHTML(a.fundId)}')">中身</button><button class="linklike" onclick="assetForm('${cleanHTML(a.id)}')">編集</button><button class="linklike" style="color:#b35c54" onclick="removeAsset('${cleanHTML(a.id)}')">削除</button></div></div></div>`}).join('')}
 // 現在表示中の区分と無関係に、各区分を独立集計する。
 function bucketBalance(bucket){return state.assets.reduce((sum,a)=>sum+(a.bucket===bucket&&(ui.broker==='all'||a.broker===ui.broker)?Math.max(0,Number(a.value)||0):0),0)}
 // 同じ証券会社・投信がNISAと高分配に同じ評価額で並ぶ場合は入力ミスの可能性を知らせる。
@@ -87,18 +90,18 @@ function exposureData(mode,arr){const sums=new Map();let known=0;for(const a of 
 function rankedRows(items,denom,kind){const max=Math.max(1,...items.map(x=>x.value));return items.slice(0,40).map((x,i)=>`<div class="exposure"><div class="exposure-head"><div style="min-width:0;flex:1"><b>${i+1}. ${cleanHTML(x.name)}</b>${kind==='company'?`<div class="fine">${cleanHTML([...x.from].join('・'))}</div>`:''}</div><div style="text-align:right;white-space:nowrap"><b>${yen(x.value)}</b><div class="fine">${denom?pct(x.value/denom*100):'—'}</div></div></div><div class="track"><div style="width:${x.value/max*100}%"></div></div></div>`).join('')}
 function analysis(){const arr=scopedAssets(),g=groupFunds(arr),result=exposureData(ui.analysis,arr);return `<h2 class="section-title" style="margin-top:0">投資先の中身</h2>${bucketSwitch()}${brokerSwitch()}<section class="card"><div class="row"><b>保有ファンドを通した投資先</b><span class="tag orange">参考推計</span></div><p class="subtext" style="margin-bottom:14px">公開されている上位組入銘柄と登録した評価額から、投資先の重なりを見える化します。</p><div class="seg">${[['company','企業'],['country','国・地域'],['sector','業種']].map(([v,l])=>`<button class="${ui.analysis===v?'active':''}" onclick="changeAnalysis('${v}')">${l}</button>`).join('')}</div>${result.items.length?`<div class="grid-2"><div class="metric"><div class="label">掲載銘柄から推計できた部分</div><b>${yen(result.known)}</b></div><div class="metric"><div class="label">データ未掲載・未登録等</div><b>${yen(Math.max(0,result.all-result.known))}</b></div></div>${rankedRows(result.items,result.all,ui.analysis)}<div class="chart-note">比率の分母は選択中の資産全体の評価額。公表されている上位銘柄のみを使用した参考推計で、全組入銘柄ではありません。THE 5Gなど投資先ファンドの比率を使う商品の数値は、実際の直接保有額を示しません。公式資料との照合未了データも含みます。</div>`:`<div class="empty"><b>分析用の保有データがありません</b><p class="subtext">資産の登録後、組入情報があるファンドについて表示します。</p><button class="btn secondary" onclick="go('import')">登録する</button></div>`}</section><h2 class="section-title">ファンドごとの組入情報</h2><section class="card"><div class="fine" style="margin-bottom:12px">それぞれの上位銘柄、資料の日付、出典を確認できます。</div>${g.length?g.map(x=>fundTile(x.id,x.name)).join(''):state.funds.filter(x=>['invesco','wcm','the5g','563a','sp500','allcountry'].includes(x.id)).map(x=>fundTile(x.id,x.name)).join('')}</section>`;}
 function fundTile(id,name){const f=fund(id);return `<button style="width:100%;display:flex;justify-content:space-between;text-align:left;align-items:center;border:none;border-top:1px solid var(--line);background:white;padding:14px 0;gap:9px" onclick="showFund('${cleanHTML(id)}')"><span><b style="font-size:14px">${cleanHTML(name)}</b><span style="display:block;font-size:11px;color:var(--sub);margin-top:6px">${f?.holdings?.length||0}銘柄掲載 ｜ ${cleanHTML(f?.date||'未登録')}</span></span><span style="color:var(--accent)">詳細を見る ›</span></button>`}
-function distributions(){const list=state.dividends.filter(d=>d.date.startsWith(String(ui.year))&&(ui.bucket==='all'||d.bucket===ui.bucket)&&(ui.broker==='all'||d.broker===ui.broker)).sort((a,b)=>b.date.localeCompare(a.date));const total=list.reduce((s,x)=>s+x.amount,0),recv=list.filter(x=>x.mode==='receive').reduce((s,x)=>s+x.amount,0),reinvest=total-recv;const chart=Array.from({length:12},(_,i)=>{const rows=list.filter(d=>Number(d.date.slice(5,7))===i+1);return{month:i+1,ordinary:rows.filter(d=>d.kind==='ordinary').reduce((s,d)=>s+d.amount,0),special:rows.filter(d=>d.kind==='special').reduce((s,d)=>s+d.amount,0),unknown:rows.filter(d=>d.kind==='unknown').reduce((s,d)=>s+d.amount,0)}});const mx=Math.max(...chart.map(r=>r.ordinary+r.special+r.unknown),1);return `<h2 class="section-title" style="margin-top:0">配当・分配金</h2>${bucketSwitch()}${brokerSwitch()}<section class="card hero"><div class="row"><div><div class="eyebrow">${ui.year}年の分配金合計</div><div class="big-number">${yen(total)}</div></div><select aria-label="集計年" style="width:105px;padding:8px;border:1px solid var(--line);border-radius:10px;background:white" onchange="changeYear(this.value)">${Array.from({length:7},(_,i)=>new Date().getFullYear()-i).map(y=>`<option value="${y}" ${ui.year===y?'selected':''}>${y}年</option>`).join('')}</select></div><div class="grid-2"><div><div class="fine">受取</div><b>${yen(recv)}</b></div><div><div class="fine">再投資</div><b>${yen(reinvest)}</b></div></div></section><section class="card"><div class="row"><b>月ごとの分配金</b><span class="fine">円</span></div><div class="month-chart">${chart.map(m=>`<div class="month-unit"><div class="month-col"><span style="height:${m.unknown/mx*100}%;background:#a2b1a9"></span><span style="height:${m.special/mx*100}%;background:#edaa58"></span><span style="height:${m.ordinary/mx*100}%;background:#32ad8f"></span></div><small>${m.month}月</small></div>`).join('')}</div><div class="month-legend"><span><i class="dot" style="background:#32ad8f"></i> 普通分配</span><span><i class="dot" style="background:#edaa58"></i> 特別分配</span><span><i class="dot" style="background:#a2b1a9"></i> 不明</span></div><div class="info">特別分配金は元本払戻金です。受け取った金額と運用益を混同しないよう種類を分けて記録します。</div></section><div class="row"><h2 class="section-title">分配金の記録</h2><button class="btn small" onclick="divForm()">＋ 追加</button></div><section class="card">${list.length?list.map(x=>`<div class="distro-row"><div><b>${cleanHTML(fund(x.fundId)?.name||x.name||'未登録商品')}</b><div class="fine">${cleanHTML(x.date)} ｜ ${x.broker==='rakuten'?'楽天':'松井'} ｜ ${x.kind==='ordinary'?'普通':x.kind==='special'?'特別':'不明'} ｜ ${x.mode==='receive'?'受取':'再投資'}</div></div><div style="text-align:right"><b>${yen(x.amount)}</b><div class="actions"><button class="linklike" onclick="divForm('${cleanHTML(x.id)}')">編集</button><button class="linklike" style="color:#b55b55" onclick="removeDiv('${cleanHTML(x.id)}')">削除</button></div></div></div>`).join(''):`<div class="empty"><b>まだ分配金の記録はありません</b><p class="subtext">普通・特別、受取・再投資を分けて管理できます。</p><button class="btn secondary" onclick="divForm()">分配金を登録</button></div>`}</section>`;}
+function distributions(){const list=state.dividends.filter(d=>d.date.startsWith(String(ui.year))&&(ui.bucket==='all'||d.bucket===ui.bucket)&&(ui.broker==='all'||d.broker===ui.broker)).sort((a,b)=>b.date.localeCompare(a.date));const total=list.reduce((s,x)=>s+x.amount,0),recv=list.filter(x=>x.mode==='receive').reduce((s,x)=>s+x.amount,0),reinvest=total-recv;const chart=Array.from({length:12},(_,i)=>{const rows=list.filter(d=>Number(d.date.slice(5,7))===i+1);return{month:i+1,ordinary:rows.filter(d=>d.kind==='ordinary').reduce((s,d)=>s+d.amount,0),special:rows.filter(d=>d.kind==='special').reduce((s,d)=>s+d.amount,0),unknown:rows.filter(d=>d.kind==='unknown').reduce((s,d)=>s+d.amount,0)}});const mx=Math.max(...chart.map(r=>r.ordinary+r.special+r.unknown),1);return `<h2 class="section-title" style="margin-top:0">配当・分配金</h2>${bucketSwitch()}${brokerSwitch()}<section class="card hero"><div class="row"><div><div class="eyebrow">${ui.year}年の分配金・再投資の記録額</div><div class="big-number">${yen(total)}</div></div><select aria-label="集計年" style="width:105px;padding:8px;border:1px solid var(--line);border-radius:10px;background:white" onchange="changeYear(this.value)">${Array.from({length:7},(_,i)=>new Date().getFullYear()-i).map(y=>`<option value="${y}" ${ui.year===y?'selected':''}>${y}年</option>`).join('')}</select></div><div class="grid-2"><div><div class="fine">受取</div><b>${yen(recv)}</b></div><div><div class="fine">再投資</div><b>${yen(reinvest)}</b></div></div></section><section class="card"><div class="row"><b>月ごとの分配金</b><span class="fine">円</span></div><div class="month-chart">${chart.map(m=>`<div class="month-unit"><div class="month-col"><span style="height:${m.unknown/mx*100}%;background:#a2b1a9"></span><span style="height:${m.special/mx*100}%;background:#edaa58"></span><span style="height:${m.ordinary/mx*100}%;background:#32ad8f"></span></div><small>${m.month}月</small></div>`).join('')}</div><div class="month-legend"><span><i class="dot" style="background:#32ad8f"></i> 普通分配</span><span><i class="dot" style="background:#edaa58"></i> 特別分配</span><span><i class="dot" style="background:#a2b1a9"></i> 不明</span></div><div class="info">特別分配金は元本払戻金です。再投資の取引金額は現金の受取額に含めません。取引履歴の「再投資額」は税引前の分配総額とは一致しない場合があり、普通／特別の区別もこの画面だけでは不明です。</div></section><section class="card"><div class="row"><b>分配金・再投資をスクショから取り込む</b><span class="tag">端末内で解析</span></div><p class="subtext">松井証券の「取引履歴」の再投資・分配金や、楽天証券の分配金履歴を読み取る機能です。画像から金額・銘柄・日付を抽出し、保存前に必ず確認できます。</p><div class="form2"><div class="field"><label>証券会社</label><select id="div-import-broker" onchange="ui.divImportBroker=this.value">${opts(brokers.filter(x=>x[0]!=='all'),ui.divImportBroker)}</select></div><div class="field"><label>取引履歴の画像（複数可）</label><input id="div-ocr-file" type="file" accept="image/*" multiple onchange="readDistributionImages(event)"></div></div>${ui.divOCRPreviews.length?`<div class="ocr-thumbs">${ui.divOCRPreviews.map((x,i)=>`<button class="ocr-thumb" onclick="showDivPreview(${i})"><img src="${x}" alt="分配金元画像 ${i+1}"><small>画像 ${i+1}</small></button>`).join('')}</div>`:''}${ui.divOCRNote?`<div class="alert">${cleanHTML(ui.divOCRNote)}</div>`:''}<div id="div-ocr-progress"></div><div class="field"><label>認識した文字（修正して再解析可能）</label><textarea id="div-ocr-raw" style="min-height:130px" placeholder="画像を選ぶとここに文字が表示されます">${cleanHTML(ui.divOCRText)}</textarea></div><button class="btn secondary" onclick="reparseDistributionText()">文字から再解析</button>${distributionCandidateUI()}<div class="fine" style="margin-top:12px">「再投資」の取引金額は、受け取った現金ではなく再投資された額として管理します。分配金の普通／特別は不明のまま登録してください。銘柄と金額の照合ができない候補は初期状態で未選択です。</div></section><div class="row"><h2 class="section-title">分配金の記録</h2><button class="btn small" onclick="divForm()">＋ 追加</button></div><section class="card">${list.length?list.map(x=>`<div class="distro-row"><div><b>${cleanHTML(fund(x.fundId)?.name||x.name||'未登録商品')}</b><div class="fine">${cleanHTML(x.date)}${x.sourceType==='reinvestment-transaction'?'（受渡日）':''} ｜ ${x.broker==='rakuten'?'楽天':'松井'} ｜ ${x.kind==='ordinary'?'普通':x.kind==='special'?'特別':'不明'} ｜ ${x.mode==='receive'?'受取':'再投資'}</div></div><div style="text-align:right"><b>${yen(x.amount)}</b><div class="actions"><button class="linklike" onclick="divForm('${cleanHTML(x.id)}')">編集</button><button class="linklike" style="color:#b55b55" onclick="removeDiv('${cleanHTML(x.id)}')">削除</button></div></div></div>`).join(''):`<div class="empty"><b>まだ分配金の記録はありません</b><p class="subtext">普通・特別、受取・再投資を分けて管理できます。</p><button class="btn secondary" onclick="divForm()">分配金を登録</button></div>`}</section>`;}
 function imports(){return `<h2 class="section-title" style="margin-top:0">スクショから登録</h2><section class="card"><div class="row"><b>① 取り込む口座を選択</b><span class="tag">端末内で解析</span></div><div class="form2"><div class="field"><label for="import-broker">証券口座</label><select id="import-broker" onchange="ui.importBroker=this.value">${opts(brokers.filter(x=>x[0]!=='all'),ui.importBroker)}</select></div><div class="field"><label for="import-bucket">資産の種類</label><select id="import-bucket" onchange="ui.importBucket=this.value">${opts(buckets.filter(x=>x[0]!=='all'),ui.importBucket)}</select></div></div><div class="divider"></div><b>② 証券会社のスクショを選択</b><div class="field"><label for="ocr-file">松井証券の保有銘柄一覧・楽天証券の商品詳細（複数枚可）</label><input id="ocr-file" type="file" accept="image/*" multiple onchange="readImages(event)"></div><div class="info">画像は端末内で文字認識し、この取り込み機能からサーバーに送信しません。松井証券の一覧は銘柄ごとに拡大して再解析します。読み取り値が違うこともあるため、口座・分類・評価額・取得額を必ず確認してください。</div>${ui.ocrPreviews.length?`<div class="field"><b>元のスクショを見ながら確認</b><p class="fine">画像をタップすると大きく表示します。元画像はページを閉じると破棄されます。</p><div class="ocr-thumbs">${ui.ocrPreviews.map((x,i)=>`<button class="ocr-thumb" onclick="showPreview(${i})"><img src="${x}" alt="取り込んだスクショ ${i+1}"><small>画像 ${i+1} を拡大</small></button>`).join('')}</div></div>`:''}${ui.ocrNote?`<div class="alert">${cleanHTML(ui.ocrNote)}</div>`:''}<div id="ocr-area"></div></section><section class="card"><b>読み取った文字を手動で修正・再解析</b><div class="field"><label for="ocr-raw">認識したテキスト</label><textarea id="ocr-raw" style="min-height:140px" placeholder="スクショを選ぶと解析テキストが入ります。必要なら修正できます。">${cleanHTML(ui.ocrText)}</textarea></div><div class="actions"><button class="btn secondary" onclick="parseFromText()">テキストから候補を探す</button><button class="btn outline" onclick="assetForm()">手入力で登録</button></div><p class="fine">投資信託名が認識できない場合や評価額を抽出できない場合は、手入力を使ってください。OCRの結果だけで自動保存しません。</p></section><section class="card"><b>③ 登録する内容を確認</b>${candidateUI()}</section>`;}
-function candidateUI(){if(!ui.candidates.length)return `<p class="subtext">まだ登録候補がありません。上でスクショを読み取るか、手入力で追加できます。</p>`;return `<p class="fine">${ui.candidates.length}件の候補を検出しました。金額や商品名を確認し、必要なものだけ登録してください。同じ商品・口座・区分の既存データは更新されます。</p><div id="candidate-list">${ui.candidates.map((c,i)=>`<div class="candidate" data-candidate="${i}"><div class="row"><span class="candidate-title">候補 ${i+1}</span><label style="font-size:12px"><input type="checkbox" class="cand-keep" ${c.include?'checked':''}> 登録する</label></div><div class="field"><label>商品</label><select class="cand-fund">${opts([["custom","その他・自由入力"],...state.funds.map(f=>[f.id,f.name])],c.fundId||'custom')}</select></div><div class="field"><label>商品名（自由入力・照合用）</label><input class="cand-name" value="${cleanHTML(c.name||'')}"></div><div class="form2"><div class="field"><label>評価額（円）</label><input class="cand-value" inputmode="numeric" type="number" min="0" value="${c.value??''}"></div><div class="field"><label>取得額（円・任意）</label><input class="cand-cost" inputmode="numeric" type="number" min="0" value="${c.cost??''}"></div><div class="field"><label>口座</label><select class="cand-broker">${opts(brokers.filter(x=>x[0]!=='all'),c.broker)}</select></div><div class="field"><label>区分</label><select class="cand-bucket">${opts(buckets.filter(x=>x[0]!=='all'),c.bucket)}</select></div></div><div class="fine">${cleanHTML(c.origin||'')}</div></div>`).join('')}</div><button class="btn" style="width:100%;margin-top:12px" onclick="saveCandidates()">チェックした候補を登録する</button>`}
+function candidateUI(){if(!ui.candidates.length)return `<p class="subtext">まだ登録候補がありません。上でスクショを読み取るか、手入力で追加できます。</p>`;return `<p class="fine">${ui.candidates.length}件の候補を検出しました。金額や商品名を確認し、必要なものだけ登録してください。同じ商品・口座・区分・NISA投資枠の既存データだけを更新します。</p><div id="candidate-list">${ui.candidates.map((c,i)=>`<div class="candidate" data-candidate="${i}"><div class="row"><span class="candidate-title">候補 ${i+1}</span><label style="font-size:12px"><input type="checkbox" class="cand-keep" ${c.include?'checked':''}> 登録する</label></div><div class="field"><label>商品</label><select class="cand-fund">${opts([["custom","その他・自由入力"],...state.funds.map(f=>[f.id,f.name])],c.fundId||'custom')}</select></div><div class="field"><label>商品名（自由入力・照合用）</label><input class="cand-name" value="${cleanHTML(c.name||'')}"></div><div class="form2"><div class="field"><label>評価額（円）</label><input class="cand-value" inputmode="numeric" type="number" min="0" value="${c.value??''}"></div><div class="field"><label>取得額（円・任意）</label><input class="cand-cost" inputmode="numeric" type="number" min="0" value="${c.cost??''}"></div><div class="field"><label>口座</label><select class="cand-broker">${opts(brokers.filter(x=>x[0]!=='all'),c.broker)}</select></div><div class="field"><label>区分</label><select class="cand-bucket">${opts(buckets.filter(x=>x[0]!=='all'),c.bucket)}</select></div><div class="field"><label>NISA投資枠</label><select class="cand-slot">${opts(slots,c.slot||'unspecified')}</select></div></div><div class="fine">${cleanHTML(c.origin||'')}</div></div>`).join('')}</div><button class="btn" style="width:100%;margin-top:12px" onclick="saveCandidates()">チェックした候補を登録する</button>`}
 function settings(){return `<h2 class="section-title" style="margin-top:0">設定・データ管理</h2><section class="card"><b>資産の登録とバックアップ</b><p class="subtext">資産・分配金・組入情報は、この端末のブラウザ領域に保存されます。GitHubの公開ファイルには書き込みません。</p><div class="actions"><button class="btn" onclick="assetForm()">資産を追加</button><button class="btn secondary" onclick="exportData()">バックアップ保存</button></div><div class="field"><label for="backup-file">バックアップから復元（JSONファイル）</label><input type="file" accept=".json,application/json" id="backup-file" onchange="importData(event)"></div><div class="alert">端末の買い替えやSafariのデータ削除で保存情報が失われる場合があります。時々バックアップをダウンロードしてください。バックアップには資産額が含まれるため、取り扱いに注意してください。</div></section><section class="card"><b>組入情報を編集する</b><p class="subtext">上位銘柄と比率を、月次レポートに合わせて手動で編集できます。公式資料の自動取り込みは未実装です。</p><div class="field"><label for="editfund">編集する投信・ETF</label><select id="editfund">${opts(state.funds.map(f=>[f.id,f.name]),state.funds[0].id)}</select></div><div class="actions"><button class="btn secondary" onclick="editFund($('#editfund').value)">組入銘柄を編集</button><button class="btn outline" onclick="addFund()">商品を追加</button></div></section><section class="card"><b>登録済みデータ</b><div class="grid-2" style="margin:12px 0"><div class="metric"><div class="label">保有明細</div><b>${state.assets.length}件</b></div><div class="metric"><div class="label">分配金の記録</div><b>${state.dividends.length}件</b></div></div><div class="actions"><button class="btn danger small" onclick="clearAssets()">資産と分配金を全削除</button></div></section><section class="card"><b>データの注意点</b><p class="subtext">初期のインベスコ・WCMには第三者資料由来の未照合値が含まれます。THE 5Gの掲載割合は投資先ファンドの割合であり、当該投信全体の割合とは異なります。563Aの中身は投資先ETFとオプションを含めて別途確認が必要です。NISAのS&P500・オルカンの組入データは未登録です。</p><p class="subtext">計算した「企業別・国別・業種別の金額」は掲載銘柄に基づく参考推計であり、正確な実質投資額とは限りません。投資判断には運用会社の公式資料を確認してください。</p></section>`;}
 function render(){const root=$('#main');root.innerHTML=ui.tab==='home'?home():ui.tab==='analysis'?analysis():ui.tab==='dividends'?distributions():ui.tab==='import'?imports():settings();const nav=[['home','ホーム','<path d="m3 10 9-7 9 7v10H3z"/><path d="M9 20v-7h6v7"/>'],['analysis','中身分析','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l7 5"/>'],['dividends','分配金','<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 14h4M15 14h2"/>'],['import','取り込み','<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5M8 12h8M12 8v8"/>'],['settings','設定','<circle cx="12" cy="12" r="3"/><path d="M19 12a7 7 0 0 0-.2-1.6l2-1.6-2-3.5-2.5 1a7 7 0 0 0-2.5-1.5l-.4-2.7h-4l-.4 2.7a7 7 0 0 0-2.5 1.5l-2.5-1-2 3.5 2 1.6a7 7 0 0 0 0 3.2l-2 1.6 2 3.5 2.5-1a7 7 0 0 0 2.5 1.5l.4 2.7h4l.4-2.7a7 7 0 0 0 2.5-1.5l2.5 1 2-3.5-2-1.6A7 7 0 0 0 19 12Z"/>']];$('#tabs').innerHTML=nav.map(([k,l,path])=>`<button class="${ui.tab===k?'active':''}" onclick="go('${k}')"><svg viewBox="0 0 24 24" aria-hidden="true">${path}</svg>${l}</button>`).join('');}
 function go(tab){ui.tab=tab;ui.modal='';$('#modal-root').innerHTML='';render();window.scrollTo({top:0,behavior:'instant'})}function changeBucket(v){ui.bucket=v;render()}function changeBroker(v){ui.broker=v;render()}function changeAnalysis(v){ui.analysis=v;render()}function changeYear(v){ui.year=+v;render()}
 function showModal(title,body,actions=''){ui.modal=title;$('#modal-root').innerHTML=`<div class="modal-cover" onclick="if(event.target===this)closeModal()"><section class="modal" role="dialog" aria-modal="true"><div class="modal-head"><h2>${cleanHTML(title)}</h2><button class="icon-btn" aria-label="閉じる" onclick="closeModal()">✕</button></div><div class="divider"></div>${body}${actions}</section></div>`}
 function closeModal(){ui.modal='';$('#modal-root').innerHTML='';}
-function assetForm(id=''){const a=state.assets.find(x=>x.id===id)||{fundId:'invesco',name:'',bucket:ui.bucket==='all'?'income':ui.bucket,broker:ui.broker==='all'?'rakuten':ui.broker,value:'',cost:'',units:'',updated:new Date().toLocaleDateString('sv-SE')};showModal(id?'保有資産を編集':'保有資産を追加',`<div class="form2"><div class="field"><label>分類</label><select id="a-bucket">${opts(buckets.filter(x=>x[0]!=='all'),a.bucket)}</select></div><div class="field"><label>口座</label><select id="a-broker">${opts(brokers.filter(x=>x[0]!=='all'),a.broker)}</select></div></div><div class="field"><label>商品</label><select id="a-fund" onchange="$('#a-name-wrap').style.display=this.value==='custom'?'block':'none'">${opts([['custom','その他・自由入力'],...state.funds.map(f=>[f.id,f.name])],a.fundId||'custom')}</select></div><div class="field" id="a-name-wrap" style="display:${!a.fundId||a.fundId==='custom'?'block':'none'}"><label>商品名</label><input id="a-name" value="${cleanHTML(a.name||'')}"></div><div class="form2"><div class="field"><label>評価額（円）必須</label><input id="a-value" type="number" min="0" inputmode="numeric" value="${a.value}"></div><div class="field"><label>取得金額（円・任意）</label><input id="a-cost" type="number" min="0" inputmode="numeric" value="${a.cost??''}"></div><div class="field"><label>数量（任意）</label><input id="a-units" type="number" min="0" step="any" value="${a.units??''}"></div><div class="field"><label>残高確認日</label><input id="a-updated" type="date" value="${cleanHTML(a.updated||'')}"></div></div><div class="fine">取得金額を入力すると、評価損益と損益率を計算できます。</div>`,`<div class="btnrow"><button class="btn outline" onclick="closeModal()">キャンセル</button><button class="btn" onclick="saveAsset('${cleanHTML(id)}')">保存する</button></div>`)}
-function saveAsset(id){const fundId=$('#a-fund').value,name=fundId==='custom'?$('#a-name').value.trim():fund(fundId)?.name||'';const value=Number($('#a-value').value),cost=$('#a-cost').value.trim()===''?null:Number($('#a-cost').value);if(!name||$('#a-value').value===''||!Number.isFinite(value)||value<0||cost!==null&&(!Number.isFinite(cost)||cost<0)){alert('商品名・評価額を正しく入力してください');return}const a={id:id||uid(),fundId,name,broker:$('#a-broker').value,bucket:$('#a-bucket').value,value,cost,units:$('#a-units').value===''?null:Number($('#a-units').value),updated:$('#a-updated').value};const idx=state.assets.findIndex(x=>x.id===id);if(idx>=0)state.assets[idx]=a;else state.assets.push(a);persist();closeModal();render()}
+function assetForm(id=''){const a=state.assets.find(x=>x.id===id)||{fundId:'invesco',name:'',bucket:ui.bucket==='all'?'income':ui.bucket,broker:ui.broker==='all'?'rakuten':ui.broker,slot:'unspecified',value:'',cost:'',units:'',updated:new Date().toLocaleDateString('sv-SE')};showModal(id?'保有資産を編集':'保有資産を追加',`<div class="form2"><div class="field"><label>分類</label><select id="a-bucket">${opts(buckets.filter(x=>x[0]!=='all'),a.bucket)}</select></div><div class="field"><label>口座</label><select id="a-broker">${opts(brokers.filter(x=>x[0]!=='all'),a.broker)}</select></div></div><div class="field"><label>NISAの投資枠（NISA保有の場合）</label><select id="a-slot">${opts(slots,a.slot||'unspecified')}</select></div><div class="field"><label>商品</label><select id="a-fund" onchange="$('#a-name-wrap').style.display=this.value==='custom'?'block':'none'">${opts([['custom','その他・自由入力'],...state.funds.map(f=>[f.id,f.name])],a.fundId||'custom')}</select></div><div class="field" id="a-name-wrap" style="display:${!a.fundId||a.fundId==='custom'?'block':'none'}"><label>商品名</label><input id="a-name" value="${cleanHTML(a.name||'')}"></div><div class="form2"><div class="field"><label>評価額（円）必須</label><input id="a-value" type="number" min="0" inputmode="numeric" value="${a.value}"></div><div class="field"><label>取得金額（円・任意）</label><input id="a-cost" type="number" min="0" inputmode="numeric" value="${a.cost??''}"></div><div class="field"><label>数量（任意）</label><input id="a-units" type="number" min="0" step="any" value="${a.units??''}"></div><div class="field"><label>残高確認日</label><input id="a-updated" type="date" value="${cleanHTML(a.updated||'')}"></div></div><div class="fine">取得金額を入力すると、評価損益と損益率を計算できます。</div>`,`<div class="btnrow"><button class="btn outline" onclick="closeModal()">キャンセル</button><button class="btn" onclick="saveAsset('${cleanHTML(id)}')">保存する</button></div>`)}
+function saveAsset(id){const fundId=$('#a-fund').value,name=fundId==='custom'?$('#a-name').value.trim():fund(fundId)?.name||'';const value=Number($('#a-value').value),cost=$('#a-cost').value.trim()===''?null:Number($('#a-cost').value);if(!name||$('#a-value').value===''||!Number.isFinite(value)||value<0||cost!==null&&(!Number.isFinite(cost)||cost<0)){alert('商品名・評価額を正しく入力してください');return}const a={id:id||uid(),fundId,name,broker:$('#a-broker').value,bucket:$('#a-bucket').value,slot:$('#a-bucket').value==='nisa'?$('#a-slot').value:'unspecified',value,cost,units:$('#a-units').value===''?null:Number($('#a-units').value),updated:$('#a-updated').value};const idx=state.assets.findIndex(x=>x.id===id);if(idx>=0)state.assets[idx]=a;else state.assets.push(a);persist();closeModal();render()}
 function removeAsset(id){if(!confirm('この保有明細を削除しますか？'))return;state.assets=state.assets.filter(a=>a.id!==id);persist();render()}
-function divForm(id=''){const d=state.dividends.find(x=>x.id===id)||{fundId:'invesco',broker:'rakuten',bucket:'income',date:new Date().toLocaleDateString('sv-SE'),amount:'',mode:'receive',kind:'unknown'};showModal(id?'分配金を編集':'分配金を追加',`<div class="field"><label>商品</label><select id="d-fund">${opts(state.funds.map(f=>[f.id,f.name]),d.fundId)}</select></div><div class="form2"><div class="field"><label>決算・入金日</label><input id="d-date" type="date" value="${cleanHTML(d.date)}"></div><div class="field"><label>金額（円）</label><input id="d-amount" type="number" inputmode="numeric" min="0" value="${d.amount}"></div><div class="field"><label>口座</label><select id="d-broker">${opts(brokers.filter(x=>x[0]!=='all'),d.broker)}</select></div><div class="field"><label>分類</label><select id="d-bucket">${opts(buckets.filter(x=>x[0]!=='all'),d.bucket)}</select></div><div class="field"><label>税務区分</label><select id="d-kind">${opts([['unknown','不明'],['ordinary','普通分配'],['special','特別分配']],d.kind)}</select></div><div class="field"><label>受け取り方</label><select id="d-mode">${opts([['receive','受取'],['reinvest','再投資']],d.mode)}</select></div></div>`,`<div class="btnrow"><button class="btn outline" onclick="closeModal()">キャンセル</button><button class="btn" onclick="saveDiv('${cleanHTML(id)}')">保存する</button></div>`)}
+function divForm(id=''){const d=state.dividends.find(x=>x.id===id)||{fundId:'invesco',broker:'rakuten',bucket:'income',date:new Date().toLocaleDateString('sv-SE'),amount:'',mode:'receive',kind:'unknown'};showModal(id?'分配金を編集':'分配金を追加',`<div class="field"><label>商品</label><select id="d-fund">${opts(state.funds.map(f=>[f.id,f.name]),d.fundId)}</select></div><div class="form2"><div class="field"><label>記録日（受渡日・入金日）</label><input id="d-date" type="date" value="${cleanHTML(d.date)}"></div><div class="field"><label>金額（円）</label><input id="d-amount" type="number" inputmode="numeric" min="0" value="${d.amount}"></div><div class="field"><label>口座</label><select id="d-broker">${opts(brokers.filter(x=>x[0]!=='all'),d.broker)}</select></div><div class="field"><label>分類</label><select id="d-bucket">${opts(buckets.filter(x=>x[0]!=='all'),d.bucket)}</select></div><div class="field"><label>税務区分</label><select id="d-kind">${opts([['unknown','不明'],['ordinary','普通分配'],['special','特別分配']],d.kind)}</select></div><div class="field"><label>受け取り方</label><select id="d-mode">${opts([['receive','受取'],['reinvest','再投資']],d.mode)}</select></div></div>`,`<div class="btnrow"><button class="btn outline" onclick="closeModal()">キャンセル</button><button class="btn" onclick="saveDiv('${cleanHTML(id)}')">保存する</button></div>`)}
 function saveDiv(id){const amount=Number($('#d-amount').value),date=$('#d-date').value;if(!date||$('#d-amount').value===''||!Number.isFinite(amount)||amount<0){alert('日付と金額を入力してください');return}const d={id:id||uid(),date,amount,fundId:$('#d-fund').value,broker:$('#d-broker').value,bucket:$('#d-bucket').value,mode:$('#d-mode').value,kind:$('#d-kind').value};const idx=state.dividends.findIndex(x=>x.id===id);if(idx>=0)state.dividends[idx]=d;else state.dividends.push(d);persist();closeModal();render()}
 function removeDiv(id){if(!confirm('この分配金記録を削除しますか？'))return;state.dividends=state.dividends.filter(x=>x.id!==id);persist();render()}
 function showFund(id){const f=fund(id);if(!f){showModal('投資先の情報',`<p class="subtext">この商品の組入情報はまだありません。</p>`);return}const h=f.holdings||[],sum=h.reduce((s,x)=>s+(+x[3]||0),0);showModal(f.name,`<div class="tag ${f.status?.includes('未了')?'orange':''}">${cleanHTML(f.status||'未登録')}</div><div class="field"><div class="fine">${cleanHTML(f.full||'')}</div><div class="fine">資料基準日：${cleanHTML(f.date||'未登録')}</div></div><div class="alert">${cleanHTML(f.basis||'組入データ未登録')}。表示は資料から抜粋した範囲のみです。</div>${h.length?`<div class="row"><b>掲載上位 ${h.length} 銘柄</b><span class="fine">割合合計 ${pct(sum)}</span></div>${h.map((r,i)=>`<div class="exposure"><div class="exposure-head"><div><b>${i+1}. ${cleanHTML(r[0])}</b><div class="fine">${cleanHTML(r[1])} / ${cleanHTML(r[2])}</div></div><b>${Number(r[3]).toFixed(2)}%</b></div><div class="track"><div style="width:${Math.min(100,+r[3]/Math.max(...h.map(x=>+x[3]))*100)}%"></div></div></div>`).join('')}`:`<div class="empty"><b>組入銘柄は未登録</b><p class="subtext">運用会社の最新資料を確認して登録できます。</p></div>`}<div class="divider"></div><div class="actions">${safeURL(f.source)==='#'?'':`<a class="btn outline" href="${safeURL(f.source)}" target="_blank" rel="noopener noreferrer">運用会社のサイト ↗</a>`}<button class="btn secondary" onclick="editFund('${cleanHTML(id)}')">組入情報を編集</button></div>`)}
@@ -180,6 +183,30 @@ function findProfit(block){
  }
  return null;
 }
+// OCRで「1,006,764」が「6,764」となる場合、損益率を照合して誤登録を防ぐ。
+function profitPercentInBlock(block){
+ for(let i=0;i<block.length;i++){
+  if(!recognizedLabel(block[i],'profit'))continue;
+  for(let j=i;j<=Math.min(i+2,block.length-1);j++){
+   if(j>i&&otherLabel(block[j],'profit'))break;
+   const s=String(block[j]).normalize('NFKC').replace(/[−ー―–]/g,'-');
+   // 率が明示された数字だけを参照し、基準価額や評価額を率として使わない。
+   const match=s.match(/([+\-]?\d{1,3}(?:[.,]\d{1,2})?)\s*%/);
+   if(match)return Number(match[1].replace(',','.'));
+  }
+ }
+ return null;
+}
+function candidateConfidence(c){
+ let score=(c.value!==''?4:0)+(c.cost!==''?2:0);
+ if(c.percent!==null&&c.percent!==undefined&&Number.isFinite(c.percent)&&Number(c.cost)>0&&c.profit!==null&&c.profit!==undefined){
+  const computed=Number(c.profit)/Number(c.cost)*100;
+  score+=Math.abs(computed-c.percent)<Math.max(.8,Math.abs(c.percent)*.08)?5:-15;
+ }
+ if(c.suspicious)score-=15;
+ if(c.derived)score-=2;
+ return score;
+}
 function inferBroker(raw,defaultBroker){if(/member\.rakuten-sec\.co\.jp|rakuten-sec|楽天証券|楽天証券株式会社|保有\s*商品\s*詳細|NISAつみたて投資枠/i.test(raw))return'rakuten';if(/matsui|松井証券|残高照会|投信評価額合計/i.test(raw))return'matsui';return defaultBroker;}
 function inferBucket(raw,defaultBucket){if(/NISA\s*(つみたて|成長|口座)|つみたて投資枠|成長投資枠/i.test(raw))return'nisa';return defaultBucket;}
 function bestRecognizedName(text,id){
@@ -193,7 +220,7 @@ function bestRecognizedName(text,id){
 function candidateFromText(text,settings={}){
  const raw=String(text||'');
  const lines=raw.replace(/\r/g,'').split('\n').map(x=>x.trim()).filter(Boolean);
- const broker=inferBroker(raw,settings.broker||ui.importBroker),bucket=inferBucket(raw,settings.bucket||ui.importBucket);
+ const broker=inferBroker(raw,settings.broker||ui.importBroker),bucket=inferBucket(raw,settings.bucket||ui.importBucket),screenSlot=settings.slot||inferSlot(raw);
  const found=[];
  for(let i=0;i<lines.length;i++){
    const pair=lines[i]+' '+(lines[i+1]||'')+' '+(lines[i+2]||'');
@@ -224,22 +251,29 @@ function candidateFromText(text,settings={}){
    const blockRaw=block.join(' '),blockBucket=/NISA|つみたて投資枠|成長投資枠/i.test(blockRaw)?'nisa':/口座区分.{0,25}特定|特定口座/i.test(blockRaw)?settings.bucket||bucket:bucket;
    // 買付・解約ボタンの数字や別銘柄の評価額を誤記録しないよう、高額な矛盾は確認待ち。
    const inconsistent=value!==null&&cost!==null&&profit!==null&&Math.abs((value-cost)-profit)>Math.max(500,Math.abs(profit)*0.03);
+   const percent=profitPercentInBlock(block);
+   const calculatedPercent=(profit!==null&&cost!==null&&cost>0)?profit/cost*100:null;
+   const percentMismatch=percent!==null&&calculatedPercent!==null&&Math.abs(percent-calculatedPercent)>Math.max(.8,Math.abs(percent)*.08);
+   const suspicious=inconsistent||percentMismatch;
    if(inconsistent)detail+=' 評価額・取得額・損益の整合が取れていません。要確認。';
-   found.push({fundId:id,name:bestRecognizedName(pair,id),broker,bucket:blockBucket,value:value??'',cost:cost!==null&&cost>=0?cost:'',include:value!==null&&!derived&&!inconsistent,origin:detail});
+   if(percentMismatch)detail+=' 【要修正】画像の損益率 '+percent+'% と読み取った金額からの損益率 '+calculatedPercent.toFixed(1)+'% が一致しません。金額の先頭が欠けた可能性があります。自動登録しないでください。';
+   found.push({fundId:id,name:bestRecognizedName(pair,id),broker,bucket:blockBucket,slot:blockBucket==='nisa'?screenSlot:'unspecified',value:value??'',cost:cost!==null&&cost>=0?cost:'',profit,percent,suspicious,derived,include:value!==null&&!derived&&!suspicious,origin:detail});
  }
  return found;
 }
 function mergeCandidates(items){
  const map=new Map();
  for(const x of items){
-  const k=[x.fundId,x.broker,x.bucket].join('|');
-  if(!map.has(k)){map.set(k,x);continue}
-  const prev=map.get(k),p=(prev.value!==''?2:0)+(prev.cost!==''?1:0),n=(x.value!==''?2:0)+(x.cost!==''?1:0);
-  // 数字の読取が進んだ候補を優先。ただし金額が衝突したら無条件で上書きしない。
-  if(n>p)map.set(k,x);
-  else if(n===p&&x.value!==''&&prev.value!==''&&x.value!==prev.value){
-   prev.include=false;
-   prev.origin+=' 別の画像領域から異なる評価額 '+Number(x.value).toLocaleString('ja-JP')+'円も検出。必ず原画面で照合してください。';
+  const k=[x.fundId,x.broker,x.bucket,x.bucket==='nisa'?(x.slot||'unspecified'):''].join('|');
+  if(!map.has(k)){map.set(k,x);continue;}
+  const prev=map.get(k),p=candidateConfidence(prev),n=candidateConfidence(x);
+  // 損益率との整合性が高い読み取りを優先。先頭桁の欠落値は採用しない。
+  if(n>p){
+    map.set(k,x);
+  }else if(n===p&&x.value!==''&&prev.value!==''&&Number(x.value)!==Number(prev.value)){
+    // 同程度の信頼度で金額が異なるときは自動選択せず元画像と照合させる。
+    prev.include=false;
+    prev.origin+=' 【要確認】別の画像領域から異なる評価額 '+Number(x.value).toLocaleString('ja-JP')+'円も検出。元画像と照合してから登録してください。';
   }
  }
  return [...map.values()];
@@ -267,21 +301,23 @@ async function readImages(ev){
     setOCRProgress(15+i/files.length*75,`画像 ${i+1}/${files.length} を解析中`);
     const f=files[i],src=await prepareImage(f);
     const raw=(await worker.recognize(src)).data.text||'';
-    let text=raw;let detected=candidateFromText(text,{broker:ui.importBroker,bucket:ui.importBucket});
+    let text=raw;const imageSlot=inferSlot(raw);let detected=candidateFromText(text,{broker:ui.importBroker,bucket:ui.importBucket,slot:imageSlot});
     const isMatsui=ui.importBroker==='matsui'&&!/member\.rakuten-sec\.co\.jp|保有\s*商品\s*詳細/i.test(raw)||/投信評価額合計|残高照会|分配金コースを変更|個別元本|口座区分/i.test(raw);
     // 松井証券の一覧は、各カードの文字が小さく、口座全体の合計金額が上にある。
     // 銘柄ごとの範囲を拡大して解析し、合計金額を個別評価額として使わない。
-    const incomplete=!detected.length||detected.some(x=>x.value==='');
-    if(isMatsui&&incomplete){
-      setOCRProgress(25+i/files.length*70,`松井証券：銘柄別に拡大して再確認中`);
+    // 松井証券は全体読み取りに金額があっても先頭桁が欠けることがある。
+    // 常に銘柄カードの縦範囲を広めに切り出し再認識。前版の .20-.58 は
+    // 一部iPhoneスクショで評価額の行を途中で切っていた。
+    if(isMatsui){
+      setOCRProgress(25+i/files.length*70,`松井証券：銘柄別に拡大して金額を再確認中`);
       try{
         await worker.setParameters({tessedit_pageseg_mode:'6'});
-        for(const [j,range] of [[0,[.20,.58]],[1,[.50,.88]]]){
-          const piece=await prepareImage(f,range,2.5);
+        for(const [j,range] of [[0,[.23,.75]],[1,[.60,.98]]]){
+          const piece=await prepareImage(f,range,1.9);
           const pieceText=(await worker.recognize(piece)).data.text||'';
           if(pieceText.trim()){
             text+='\n【銘柄ごと再解析 '+(j+1)+'】\n'+pieceText;
-            detected=mergeCandidates([...detected,...candidateFromText(pieceText,{broker:'matsui',bucket:ui.importBucket})]);
+            detected=mergeCandidates([...detected,...candidateFromText(pieceText,{broker:'matsui',bucket:ui.importBucket,slot:imageSlot})]);
           }
         }
       }catch(e){text+='\n【松井拡大認識エラー】'+String(e.message||e);}
@@ -295,7 +331,7 @@ async function readImages(ev){
         const crop=await prepareImage(f,[.12,.82],1.75);
         const extra=(await worker.recognize(crop)).data.text||'';
         text+='\n【金額欄再確認】\n'+extra;
-        detected=mergeCandidates([...detected,...candidateFromText(extra,{broker:'rakuten',bucket:ui.importBucket})]);
+        detected=mergeCandidates([...detected,...candidateFromText(extra,{broker:'rakuten',bucket:ui.importBucket,slot:imageSlot})]);
         if(/保有\s*商品\s*詳細/.test(text)&&detected.length===1&&detected[0].value===''){
           const band=await prepareImage(f,[.18,.36],2.3);
           const bandText=(await worker.recognize(band)).data.text||'';
@@ -313,12 +349,129 @@ async function readImages(ev){
   }
   ui.ocrText=chunks.join('\n\n');ui.candidates=mergeCandidates(items);
   const complete=ui.candidates.filter(x=>x.value!=='').length;
-  ui.ocrNote=ui.candidates.length?`${ui.candidates.length}件の候補、うち金額の読取成功は${complete}件。松井の画面上部の「投信評価額合計」は個別銘柄として登録しません。元の画像で金額・区分を確認してください。`: '商品名・金額の自動特定ができませんでした。松井証券なら銘柄ごとの枠が大きく写るようにスクショを取り直すと改善する場合があります。手入力でも登録できます。';
+  ui.ocrNote=ui.candidates.length?`${ui.candidates.length}件の候補、うち金額の読取成功は${complete}件。${ui.candidates.some(c=>c.suspicious)?'損益率と金額が一致しない候補があります。登録チェックを外しています。':''}松井の画面上部の「投信評価額合計」は個別銘柄として登録しません。元の画像で金額・区分を確認してください。`: '商品名・金額の自動特定ができませんでした。松井証券なら銘柄ごとの枠が大きく写るようにスクショを取り直すと改善する場合があります。手入力でも登録できます。';
   setOCRProgress(100,'文字認識が完了しました');
  }catch(e){ui.ocrNote='文字認識でエラーが発生しました。元のスクショを見ながら手入力できます。詳細: '+e.message;}
  finally{if(worker)try{await worker.terminate()}catch(_){}ui.ocrBusy=false;render();}
 }
-function saveCandidates(){let count=0;for(const row of $$('#candidate-list .candidate')){if(!row.querySelector('.cand-keep').checked)continue;const fundId=row.querySelector('.cand-fund').value,name=row.querySelector('.cand-name').value.trim()||fund(fundId)?.name||'';const valEl=row.querySelector('.cand-value'),value=Number(valEl.value),costEl=row.querySelector('.cand-cost'),cost=costEl.value.trim()===''?null:Number(costEl.value);if(!name||valEl.value===''||!Number.isFinite(value)||value<0||cost!==null&&(!Number.isFinite(cost)||cost<0)){alert('登録する候補の商品名・評価額・取得額を確認してください');return}const broker=row.querySelector('.cand-broker').value,bucket=row.querySelector('.cand-bucket').value;const existing=state.assets.find(a=>a.fundId===fundId&&a.broker===broker&&a.bucket===bucket&&(fundId!=='custom'||a.name===name));const a={id:existing?.id||uid(),fundId,name,value,cost,broker,bucket,units:existing?.units??null,updated:new Date().toLocaleDateString('sv-SE')};if(existing)Object.assign(existing,a);else state.assets.push(a);count++}if(!count){alert('登録する候補にチェックを入れてください');return}persist();ui.candidates=[];ui.ocrText='';ui.bucket='all';ui.broker='all';go('home');alert(count+'件を保存しました。「全体」からNISA・高分配を切り替えて区分を確認してください。')}
+
+// 分配金／再投資の履歴専用OCR。口座合計・残高・約定単価や口数は金額として使わない。
+function normalizeDivText(v){return String(v||'').normalize('NFKC').replace(/[ \t\u3000]/g,' ').replace(/[−ー―–]/g,'-');}
+function findHistoryDate(block){
+ const m=normalizeDivText(block).match(/20\d{2}\s*[\/.-]\s*(?:0?[1-9]|1[0-2])\s*[\/.-]\s*(?:[0-2]?\d|3[01])/);
+ if(!m)return '';
+ const p=m[0].replace(/\s/g,'').split(/[\/.-]/).map(Number);return `${p[0]}-${String(p[1]).padStart(2,'0')}-${String(p[2]).padStart(2,'0')}`;
+}
+function findHistoryAmount(segment){
+ const lines=normalizeDivText(segment).split(/\n/).map(x=>x.trim()).filter(Boolean);
+ // 「取引金額」を最優先。口数、約定単価、残高は採用しない。
+ for(let i=0;i<lines.length;i++){
+  if(!/取引\s*金額|受渡\s*金額|再投資\s*金額|分配\s*金額|入金\s*金額/.test(lines[i]))continue;
+  const inline=lines[i].replace(/^.*?(?:取引\s*金額|受渡\s*金額|再投資\s*金額|分配\s*金額|入金\s*金額)\s*[:：]?/,'');
+  const search=[inline, ...lines.slice(i+1,i+4).filter(l=>!/約定単価|取引数量|取引\s*数量|分配\s*金\s*コース|現金残高|手数料|口座区分/.test(l))];
+  for(const str of search){const hits=numberTokens(str).filter(x=>x.v>=1&&x.v<=1e9);if(hits.length)return hits[0].v;}
+ }
+ return null;
+}
+function parseDistributionText(raw,broker='matsui'){
+ const text=normalizeDivText(raw),lines=text.split('\n').map(s=>s.trim()).filter(Boolean),heads=[];
+ for(let i=0;i<lines.length;i++){
+  if(/【画像\s*\d+】/.test(lines[i]))continue;
+  const direct=identify(lines[i]);
+  if(!direct)continue;
+  // 行が銘柄名であることを確認。明細金額の説明にファンド名が紛れた場合は除く。
+  if(/評価額|損益|基準価額|口座|再投資\s*金額|取引\s*金額/.test(lines[i]))continue;
+  if(heads.length&&heads.at(-1).id===direct&&i-heads.at(-1).index<3)continue;
+  heads.push({index:i,id:direct,line:lines[i]});
+ }
+ const found=[];
+ for(let j=0;j<heads.length;j++){
+  const h=heads[j],next=heads[j+1]?.index??lines.length;
+  // 取引履歴中の異なる種類の明細（振替等）の項目を混ぜない
+  const slice=lines.slice(h.index,Math.min(next,h.index+25));const segment=slice.join('\n');
+  const mode=/再\s*投\s*資/.test(segment)?'reinvest':/分配\s*金\s*(受取|入金)|分配金支払|分配金受取/.test(segment)?'receive':'';
+  if(!mode)continue;
+  const value=findHistoryAmount(segment),date=findHistoryDate(segment),name=bestRecognizedName(h.line,h.id);
+  const transaction=mode==='reinvest'?'再投資取引':'分配金の受取';
+  const diagnostic=[transaction,'取引金額：'+(value===null?'未取得':yen(value)),date?'受渡日等：'+date:'日付未取得'];
+  found.push({fundId:h.id,name,broker,bucket:'income',date,amount:value===null?'':value,mode,kind:'unknown',include:value!==null&&!!date,origin:diagnostic.join('／'),sourceType:mode==='reinvest'?'reinvestment-transaction':'payment-history'});
+ }
+ // 銘柄名がない入出金履歴は対応する銘柄を決め打ちせず登録候補にしない
+ const seen=new Map();for(const d of found){const key=[d.fundId,d.date,d.mode,d.broker,d.amount].join('|');if(!seen.has(key))seen.set(key,d)}return [...seen.values()];
+}
+function distributionCandidateUI(){if(!ui.divCandidates.length)return '<p class="subtext" style="margin-top:12px">まだ読み取り候補はありません。</p>';
+ return `<div class="divider"></div><b>読み取り候補の確認（${ui.divCandidates.length}件）</b><div id="div-candidate-list">${ui.divCandidates.map((c,i)=>`<div class="candidate" data-divcandidate="${i}"><div class="row"><b>候補${i+1}</b><label><input class="div-keep" type="checkbox" ${c.include?'checked':''}> 登録する</label></div><div class="field"><label>投資信託・ETF</label><select class="div-fund">${opts(state.funds.map(f=>[f.id,f.name]),c.fundId)}</select></div><div class="form2"><div class="field"><label>金額（円）</label><input class="div-amount" type="number" min="0" inputmode="numeric" value="${cleanHTML(c.amount)}"></div><div class="field"><label>日付（画面にある受渡日等）</label><input class="div-date" type="date" value="${cleanHTML(c.date)}"></div><div class="field"><label>証券会社</label><select class="div-broker">${opts(brokers.filter(x=>x[0]!=='all'),c.broker)}</select></div><div class="field"><label>取り扱い</label><select class="div-mode">${opts([['receive','現金受取'],['reinvest','再投資']],c.mode)}</select></div><div class="field"><label>分配金の種別</label><select class="div-kind">${opts([['unknown','不明'],['ordinary','普通'],['special','特別']],c.kind)}</select></div><div class="field"><label>資産区分</label><select class="div-bucket">${opts(buckets.filter(x=>x[0]!=='all'),c.bucket)}</select></div></div><div class="fine">${cleanHTML(c.origin||'')}</div></div>`).join('')}</div><button class="btn" style="margin-top:12px;width:100%" onclick="saveDistributionCandidates()">確認した分配金記録を登録する</button>`;
+}
+function showDivPreview(i){const src=ui.divOCRPreviews[i];if(src)showModal('分配金の元画像 '+(i+1),`<img class="preview-image" alt="元画像" src="${src}">`);}
+function reparseDistributionText(){ui.divOCRText=$('#div-ocr-raw').value;ui.divCandidates=ui.divOCRText.split(/(?=【画像\s*\d+】)/).flatMap(s=>parseDistributionText(s,ui.divImportBroker));ui.divOCRNote=`${ui.divCandidates.length}件の候補。元画像と金額を照合してから登録してください。`;render();}
+async function readDistributionImages(ev){
+ const files=Array.from(ev.target.files||[]);if(!files.length)return;
+ if(files.length>8){alert('一度に8枚まで選択できます');return;}
+ ui.divImportBroker=$('#div-import-broker').value;ui.divOCRText='';ui.divCandidates=[];ui.divOCRPreviews=[];ui.divOCRNote='';
+ let worker=null;
+ try{
+  const area=$('#div-ocr-progress');if(area)area.innerHTML='<div class="loader">画像の文字を読み取っています…</div>';
+  const Tess=await getTesseract();worker=await Tess.createWorker('jpn+eng',1);
+  for(let i=0;i<files.length;i++){
+   const file=files[i];ui.divOCRPreviews.push(await previewFile(file));
+   let raw=(await worker.recognize(await prepareImage(file,null,1.8))).data.text||'';
+   let cands=parseDistributionText(raw,ui.divImportBroker);
+   if(!cands.length||cands.some(c=>c.amount==='')){
+    // 松井の履歴は上下に複数の取引が並ぶため上下の領域を拡大する。
+    const chunks=[];
+    for(const range of [[.08,.52],[.42,.88]]){
+     const extra=(await worker.recognize(await prepareImage(file,range,2.15))).data.text||'';
+     chunks.push(extra);cands.push(...parseDistributionText(extra,ui.divImportBroker));
+    }
+    raw+='\n【拡大再認識】\n'+chunks.join('\n');
+   }
+   ui.divOCRText+=`【画像 ${i+1}】\n${raw}\n`;
+   for(const c of cands){const old=ui.divCandidates.find(x=>x.fundId===c.fundId&&x.broker===c.broker&&x.mode===c.mode&&x.date===c.date);
+    if(!old)ui.divCandidates.push(c);
+    else if((old.amount===''||!old.date)&&c.amount!==''){Object.assign(old,c);}
+    else if(old.amount!==''&&c.amount!==''&&old.amount!==c.amount){old.include=false;old.origin+='／異なる金額も検出。必ず元画像を確認';}
+   }
+  }
+  ui.divOCRNote=ui.divCandidates.length?`${ui.divCandidates.length}件の候補を読み取りました。未確定の金額・日付は元画像で確認し、必要なものだけ登録してください。`:'該当する再投資・分配金の明細を見つけられませんでした。認識文字を修正して再解析、または手入力してください。';
+ }catch(e){ui.divOCRNote='画像を解析できませんでした：'+e.message+'。手入力でも登録できます。';}
+ finally{if(worker)try{await worker.terminate()}catch(_){}render();}
+}
+function saveDistributionCandidates(){
+ let count=0,duplicates=0;
+ for(const row of $$('#div-candidate-list .candidate')){
+  if(!row.querySelector('.div-keep').checked)continue;
+  const amountEl=row.querySelector('.div-amount'),date=row.querySelector('.div-date').value,amount=Number(amountEl.value),fundId=row.querySelector('.div-fund').value,broker=row.querySelector('.div-broker').value,mode=row.querySelector('.div-mode').value,bucket=row.querySelector('.div-bucket').value,kind=row.querySelector('.div-kind').value;
+  if(!date||!amountEl.value||!Number.isFinite(amount)||amount<=0){alert('金額と日付を確認してください');return;}
+  const exists=state.dividends.some(d=>d.fundId===fundId&&d.broker===broker&&d.date===date&&d.mode===mode&&d.amount===amount);
+  if(exists){duplicates++;continue;}
+  state.dividends.push({id:uid(),date,amount,fundId,broker,mode,bucket,kind,sourceType:mode==='reinvest'?'reinvestment-transaction':'payment-history'});count++;
+ }
+ if(count===0){alert(duplicates?'同じ記録がすでに登録されています。重複を追加しませんでした。':'登録する候補にチェックを入れて金額・日付を確認してください。');return;}
+ if(!persist())return;
+ ui.divCandidates=[];ui.divOCRText='';ui.divOCRPreviews=[];ui.bucket='income';ui.broker='all';ui.tab='dividends';render();
+ alert(count+'件を保存しました。'+(duplicates?'重複 '+duplicates+'件は追加していません。':'')+'再投資取引は現金受取に含まれません。');
+}
+function saveCandidates(){
+ let count=0;
+ for(const row of $$('#candidate-list .candidate')){
+  if(!row.querySelector('.cand-keep').checked)continue;
+  const fundId=row.querySelector('.cand-fund').value,name=row.querySelector('.cand-name').value.trim()||fund(fundId)?.name||'';
+  const valEl=row.querySelector('.cand-value'),value=Number(valEl.value),costEl=row.querySelector('.cand-cost'),cost=costEl.value.trim()===''?null:Number(costEl.value);
+  if(!name||valEl.value===''||!Number.isFinite(value)||value<0||cost!==null&&(!Number.isFinite(cost)||cost<0)){alert('登録する候補の商品名・評価額・取得額を確認してください');return;}
+  const broker=row.querySelector('.cand-broker').value,bucket=row.querySelector('.cand-bucket').value,slot=bucket==='nisa'?row.querySelector('.cand-slot').value:'unspecified';
+  const matches=a=>a.fundId===fundId&&a.broker===broker&&a.bucket===bucket&&(fundId!=='custom'||a.name===name);
+  let existing=state.assets.find(a=>matches(a)&&(a.slot||'unspecified')===slot);
+  // 過去バージョンで投資枠が未保存の場合、同一の評価額・取得額なら安全に枠を付与する。
+  if(!existing&&bucket==='nisa'&&slot!=='unspecified')existing=state.assets.find(a=>matches(a)&&(!a.slot||a.slot==='unspecified')&&Number(a.value)===value&&(a.cost===null||a.cost===''||cost===null||Number(a.cost)===cost));
+  // 投資枠不明のまま上書きすると成長枠とつみたて枠が混ざるため保存を停止する。
+  if(!existing&&bucket==='nisa'&&slot==='unspecified'&&state.assets.some(a=>matches(a))){alert('同じNISA商品が登録されています。候補の「NISA投資枠」をつみたて／成長から選択してください。');return;}
+  const a={id:existing?.id||uid(),fundId,name,value,cost,broker,bucket,slot,units:existing?.units??null,updated:new Date().toLocaleDateString('sv-SE')};
+  if(existing)Object.assign(existing,a);else state.assets.push(a);count++;
+ }
+ if(!count){alert('登録する候補にチェックを入れてください');return;}
+ if(!persist())return;ui.candidates=[];ui.ocrText='';ui.bucket='all';ui.broker='all';go('home');alert(count+'件を保存しました。NISAの「つみたて投資枠」「成長投資枠」は別明細で、円グラフではファンドごとに合算されます。');
+}
+
 render();
 </script>
 </body>
