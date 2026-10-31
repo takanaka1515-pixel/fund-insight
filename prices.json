@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-10-31T00:00:00+09:00",
+  "quotes": [
+    {
+      "fundId": "sp500",
+      "date": "2026-10-30",
+      "price": 44816,
+      "unit": "per10000",
+      "source": "初期値・SBI証券掲載",
+      "sourceUrl": "https://site0.sbisec.co.jp/marble/fund/history/standardprice.do?fund_sec_code=03311187",
+      "name": "eMAXIS Slim 米国株式（S&P500）"
+    },
+    {
+      "fundId": "allcountry",
+      "date": "2026-10-30",
+      "price": 37716,
+      "unit": "per10000",
+      "source": "初期値・SBI証券掲載",
+      "sourceUrl": "https://site0.sbisec.co.jp/marble/fund/history/standardprice.do?fund_sec_code=0331418A",
+      "name": "eMAXIS Slim 全世界株式（オール・カントリー）"
+    }
+  ]
+}
