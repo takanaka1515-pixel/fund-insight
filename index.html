@@ -16,7 +16,7 @@
 </style>
 </head>
 <body>
-<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.14</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携していません。公開価格を取得でき、かつ保有数量・自動更新を設定した資産のみ評価額を更新できます。組入情報と保有数量は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
+<div class="app"><header class="top"><div class="brand"><div class="mark">投</div><div><h1>投信の中身</h1><small>資産を分けて、投資先まで見える</small></div></div><span class="version">v0.15</span></header><main id="main"></main><div class="fine" style="margin:22px 4px 6px">このアプリは端末内で管理する個人用ツールです。証券口座とは直接連携していません。公開価格を取得でき、かつ保有数量・自動更新を設定した資産のみ評価額を更新できます。組入情報と保有数量は自動更新されません。端末データを消す前に「設定」からバックアップしてください。</div></div>
 <nav class="tabbar" id="tabs" aria-label="メインメニュー"></nav>
 <div id="modal-root"></div>
 <script>
@@ -317,7 +317,7 @@ function etfQuantityAndPrice(text){
 // 楽天証券の商品詳細、松井証券の銘柄詳細の両方で、数量ラベルと数値を結びつける。
 function quantityFromBlock(lines, fundId){
  const rows=Array.isArray(lines)?lines:String(lines||'').split(/\r?\n/);
- const label=/(?:保有数量|保有口数|保有株数|保有数最|保有残高|現在の保有数量)/;
+ const label=/(?:保有(?:数[量最貴買墨]|口数|株数|残高)|現在の保有(?:数量|口数)|保有株式数)/;
  const unrelated=/(?:評価額|評価損益|取得総額|取得金額|平均取得|個別元本|基準価額|時価|トータルリターン|分配金|注文数量|約定数量|取引数量|口座区分)/;
  const stock=['563a','435a'].includes(fundId);
  function quantityNumber(row, requireUnit){
@@ -351,7 +351,7 @@ function quantityFromBlock(lines, fundId){
     const tail=line.replace(/^.*?(?:保有数量|保有口数|保有株数|保有残高|現在の保有数量)\s*[:：]?\s*/,'');
     if(tail!==line)value=quantityNumber(tail,false);
    }
-   if(value===null&&j===i+1&&/^[\d\s,.，口株]+$/.test(line))value=quantityNumber(line,false);
+   if(value===null&&j>i&&/^[\d\s,.，口株ロ□]+$/.test(line))value=quantityNumber(line.replace(/(\d)\s*[ロ□](?=\s|$)/g,'$1口'),false);
    if(value!==null){values.push(value);break;}
   }
  }
@@ -359,6 +359,27 @@ function quantityFromBlock(lines, fundId){
  if(distinct.length===1)return {units:distinct[0],status:'read',note:'画像の「保有数量／保有口数」欄から読み取り'};
  if(distinct.length>1)return {units:null,status:'conflict',note:'同じ画像内で保有数量が一致しません。元画像で確認してください'};
  return {units:null,status:'missing',note:'保有口数・株数が見つかりません（推測しません）'};
+}
+// v0.15: OCRが「保有数量」の見出しを読み損ねても、画像から実際に認識した数字だけを候補にする。
+// 評価額から口数を逆算して数値を作ることはしない。価格との一致は検算にのみ使う。
+function quantityFromFocusedText(text, fundId, value){
+ const direct=quantityFromBlock(String(text||'').split(/\r?\n/),fundId);
+ if(direct.units!==null)return {...direct,confirmed:true};
+ if(direct.status==='conflict')return direct;
+ const q=quoteFor(fundId),factor=priceFactor(fundId);
+ if(!validQuote(q)||!Number.isFinite(Number(value))||Number(value)<=0)return direct;
+ const found=[];
+ for(const row of String(text||'').normalize('NFKC').split(/\r?\n/)){
+  for(const m of row.matchAll(/(?:^|[^\d])((?:\d{1,3}(?:[,．.]\d{3})+|\d{5,10}))\s*[口株ロ□]?(?!\d)/g)){
+   const n=Number(m[1].replace(/[,．.]/g,''));
+   if(!Number.isSafeInteger(n)||n<=0||n>1e10)continue;
+   const computed=Math.round(n*Number(q.price)/factor);
+   if(Math.abs(computed-Number(value))<=Math.max(3,Number(value)*0.003))found.push(n);
+  }
+ }
+ const distinct=[...new Set(found)];
+ return distinct.length===1?{units:distinct[0],status:'needs-confirmation',confirmed:false,
+  note:'拡大画像で認識した数字を公開価格と評価額で照合。数量ラベルは未確認なので原画像で要確認'}:direct;
 }
 function candidateAutoEligible(c){
  const q=quoteFor(c.fundId),qty=Number(c.units),amount=Number(c.value);
@@ -618,6 +639,28 @@ async function readImages(ev){
         }
       }catch(e){text+='\n【楽天拡大認識エラー】'+String(e.message||e);}
       finally{try{await worker.setParameters({tessedit_pageseg_mode:'3'})}catch(_){}}
+    }
+    // 楽天証券の個別保有画面では右列の「保有数量」が独立して読まれることがある。
+    // 数量欄のみに再度フォーカスしたOCRを使う（不明なら空欄のまま）。
+    if(!isMatsui&&detected.length===1&&!detected[0].units&&!detected[0].unitConflict){
+      try{
+        setOCRProgress(85,'楽天証券：保有口数を拡大して再確認中');
+        await worker.setParameters({tessedit_pageseg_mode:'11'});
+        const qtyCrop=await prepareImage(f,[.40,.68],2.4);
+        const qtyRaw=(await worker.recognize(qtyCrop)).data.text||'';
+        text+='\n【保有数量の拡大認識】\n'+qtyRaw;
+        const q=quantityFromFocusedText(qtyRaw,detected[0].fundId,detected[0].value);
+        if(q.units!==null){
+          detected[0].units=q.units;
+          detected[0].origin+=' '+q.note+'。';
+          if(!q.confirmed){
+            detected[0].include=false;
+            detected[0].unitConflict=true;
+            detected[0].origin+=' 【要確認】数量見出しは未読取。数字を元画像で照合して登録してください。';
+          }
+        }
+      }catch(e){text+='\n【数量欄再確認エラー】'+String(e.message||e);}
+      finally{try{await worker.setParameters({tessedit_pageseg_mode:'3'})}catch(_) {}}
     }
     chunks.push('【画像 '+(i+1)+'】\n'+text);
     items.push(...detected);
