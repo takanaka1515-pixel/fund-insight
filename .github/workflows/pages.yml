@@ -5,10 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
   schedule:
-    - cron: '15 14 * * 1-5'
+    - cron: '15 14 * * 1-5'  # 平日23:15 JST（日本の祝日も実行対象）
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -21,19 +21,34 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: github-pages
-      url: $&#123;&#123; steps.deployment.outputs.page_url &#125;&#125;
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
-      - uses: actions/checkout@v4
-      - name: Get public NAV quotes
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Fetch public NAV quotes
+        run: python3 fetch_prices.py
+
+      - name: Commit verified NAV quotes when changed
         run: |
-          if [ -f scripts/fetch_prices.py ]; then
-            python3 scripts/fetch_prices.py
+          if git diff --quiet -- prices.json; then
+            echo '価格ファイルに変更はありません（取得失敗時は従来値を保持）'
           else
-            python3 fetch_prices.py
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add prices.json
+            git commit -m 'Update verified public NAV quotes'
+            git push
           fi
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v4
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
           path: .
-      - id: deployment
+
+      - name: Deploy GitHub Pages
+        id: deployment
         uses: actions/deploy-pages@v4
