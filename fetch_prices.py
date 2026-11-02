@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Update PUBLIC mutual-fund NAV quotes without brokerage credentials.
+"""Safely refresh public mutual-fund NAV quotes for fund-insight.
 
-The repository must contain prices.json. Fetch only public, verified values;
-never publish invented values or include private portfolio/account information.
+No brokerage login, private holding data, or account IDs are used. Public
+sources are verified; failed fetches preserve the previously saved quotes.
 """
 from __future__ import annotations
 
@@ -13,10 +13,8 @@ import pathlib
 import re
 import sys
 import unicodedata
-import urllib.error
 import urllib.request
 
-# Works from either repo-root/fetch_prices.py or repo-root/scripts/fetch_prices.py.
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parent if HERE.name == "scripts" else HERE
 OUT = ROOT / "prices.json"
@@ -35,6 +33,7 @@ FUNDS = {
 }
 
 OFFICIAL = "https://developer.am.mufg.jp/fund_information_latest/fund_cd/{}"
+CHART = "https://www.am.mufg.jp/fund_file/chart/chart_data_{}.js"
 FALLBACK = "https://site0.sbisec.co.jp/marble/fund/history/standardprice.do?fund_sec_code={}"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (compatible; fund-insight-personal/0.14)",
@@ -54,9 +53,9 @@ def check_name(fid: str, value: str) -> None:
 
 
 def check_day(day: str) -> dt.date:
-    raw = day.replace("/", "").replace("-", "")
+    raw = str(day).replace("/", "").replace("-", "")
     if not re.fullmatch(r"20\d{6}", raw):
-        raise ValueError("不正な基準日")
+        raise ValueError("不正な基準日: " + repr(day))
     result = dt.datetime.strptime(raw, "%Y%m%d").date()
     today = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date()
     if not dt.date(2020, 1, 1) <= result <= today:
@@ -86,18 +85,16 @@ def fetch_text(url: str) -> str:
         if len(raw) > 2_000_000:
             raise ValueError("レスポンスが大きすぎます")
         charset = resp.headers.get_content_charset()
-    # Avoid blindly accepting Latin-1: it decodes corrupted Japanese text too.
-    encodings = ["utf-8-sig", "cp932", charset]
-    for enc in encodings:
+    for enc in ("utf-8-sig", "cp932", charset):
         if not enc or enc.lower() in ("iso-8859-1", "latin-1"):
             continue
         try:
-            text = raw.decode(enc)
-            if "datasets" in text or "基準価額" in text:
-                return text
+            decoded = raw.decode(enc)
+            if "datasets" in decoded or '"ROWS"' in decoded or "基準価額" in decoded:
+                return decoded
         except (UnicodeError, LookupError):
-            continue
-    raise ValueError("日本語の公開価格データを正しく解読できません")
+            pass
+    raise ValueError("公開価格データを正しく読み取れません")
 
 
 def from_official(fid: str) -> dict:
@@ -105,17 +102,43 @@ def from_official(fid: str) -> dict:
     url = OFFICIAL.format(cfg["fund_cd"])
     response = json.loads(fetch_text(url))
     if not isinstance(response, dict) or not isinstance(response.get("datasets"), list):
-        raise ValueError("公式APIの応答形式が不正")
+        raise ValueError("公式APIの形式が不正")
     items = response["datasets"]
     if len(items) != 1 or not isinstance(items[0], dict):
-        raise ValueError("公式APIで銘柄を1件に特定できません")
+        raise ValueError("対象銘柄が1件に特定できません")
     record = items[0]
     check_name(fid, str(record.get("fund_name", "")))
     if record.get("fund_cd") is not None and str(record["fund_cd"]).strip() != cfg["fund_cd"]:
-        raise ValueError("公式APIのファンドコードが一致しません")
+        raise ValueError("ファンドコードが一致しません")
     nav = int(str(record.get("nav", "")).replace(",", ""))
     return make_quote(fid, str(record.get("base_date", "")), nav,
                       "三菱UFJアセットマネジメント公式API", url)
+
+
+def from_manager_chart(fid: str) -> dict:
+    """Fallback using manager's public historical chart data for this fund code."""
+    cfg = FUNDS[fid]
+    url = CHART.format(cfg["fund_cd"])
+    payload = json.loads(fetch_text(url))
+    rows = payload.get("ROWS") if isinstance(payload, dict) else None
+    if not isinstance(rows, list) or len(rows) < 3:
+        raise ValueError("運用会社の公開価格履歴を取得できません")
+    parsed: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        day = str(row.get("BASE_DATE") or "").strip()
+        raw = str(row.get("BASE_PRICE") or "").replace(",", "").strip()
+        if re.fullmatch(r"20\d{6}", day) and re.fullmatch(r"\d+(?:\.0+)?", raw):
+            nav = int(float(raw))
+            if day in parsed and parsed[day] != nav:
+                raise ValueError("同じ基準日に複数の価格があります")
+            parsed[day] = nav
+    if len(parsed) < 3:
+        raise ValueError("公開価格履歴を検証できません")
+    latest = max(parsed)
+    return make_quote(fid, latest, parsed[latest],
+                      "三菱UFJアセットマネジメント公開チャート履歴", url)
 
 
 class VisibleText(HTMLParser):
@@ -144,15 +167,10 @@ def from_sbi_page(fid: str) -> dict:
     parser = VisibleText()
     parser.feed(content)
     readable = "\n".join(part for part in parser.values if part)
-    # Validate fund identity before using numbers from the page.
     check_name(fid, readable)
     if "基準価額" not in readable or "年月日" not in readable:
         raise ValueError("SBIの基準価額一覧ではありません")
-    # Daily quotes on the list are displayed as YYYY/MM/DD followed by NAV in yen.
-    matches = re.findall(
-        r"(?<!\d)(20\d{2}/\d{2}/\d{2})\s+([\d,]{4,9})\s*円",
-        readable,
-    )
+    matches = re.findall(r"(?<!\d)(20\d{2}/\d{2}/\d{2})\s+([\d,]{4,9})\s*円", readable)
     if len(matches) < 3:
         raise ValueError("基準価額の履歴を3件以上確認できません")
     values: dict[str, set[int]] = {}
@@ -160,19 +178,19 @@ def from_sbi_page(fid: str) -> dict:
         values.setdefault(day, set()).add(int(nav_str.replace(",", "")))
     if any(len(items) != 1 for items in values.values()):
         raise ValueError("同じ日付に異なる価格があります")
-    latest = max(values, key=lambda s: s.replace("/", ""))
+    latest = max(values, key=lambda day: day.replace("/", ""))
     return make_quote(fid, latest, next(iter(values[latest])),
                       "SBI証券・公開基準価額一覧（代替）", url)
 
 
 def fetch_quote(fid: str) -> dict:
-    errors = []
-    for method in (from_official, from_sbi_page):
+    failures = []
+    for method in (from_official, from_manager_chart, from_sbi_page):
         try:
             return method(fid)
         except Exception as exc:
-            errors.append(f"{method.__name__}: {type(exc).__name__}: {exc}")
-    raise ValueError(" / ".join(errors))
+            failures.append(f"{method.__name__}: {type(exc).__name__}: {exc}")
+    raise ValueError(" / ".join(failures))
 
 
 def main() -> int:
@@ -187,7 +205,7 @@ def main() -> int:
                     previous[quote["fundId"]] = quote
         except (OSError, ValueError, TypeError, AttributeError) as exc:
             print("ERROR: 既存のprices.jsonを読み取れません:", exc, file=sys.stderr)
-            return 1  # Never destroy a malformed original file.
+            return 1
     else:
         print("WARNING: 既存のprices.jsonがありません", file=sys.stderr)
 
@@ -205,9 +223,9 @@ def main() -> int:
                     raise ValueError("同じ基準日なのに価格が異なります")
                 print(fid, "確認済み・変更なし", quote["date"])
                 continue
-            # A large change over a few days is more likely to be a parsing error.
             if before:
-                gap = (dt.date.fromisoformat(quote["date"]) - dt.date.fromisoformat(before["date"])).days
+                gap = (dt.date.fromisoformat(quote["date"]) -
+                       dt.date.fromisoformat(before["date"])).days
                 if gap <= 10 and not 0.8 <= quote["price"] / before["price"] <= 1.2:
                     raise ValueError("価格変化が20%を超え、更新を保留します")
             quotes[fid] = quote
@@ -228,7 +246,7 @@ def main() -> int:
         OUT.write_text(json.dumps(doc, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"公開価格: {len(quotes)}件 / 新規更新: {changed}件 / 自動更新対象: 2銘柄")
     if changed == 0:
-        print("NOTICE: 基準価額は更新されていません。公開元の接続状況を確認してください")
+        print("NOTICE: 基準価額は更新されていません。取得先と公開元を確認してください")
     return 0
 
 
