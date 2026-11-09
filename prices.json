@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "generatedAt": "2026-11-06T14:56:19+00:00",
+  "generatedAt": "2026-11-09T14:59:31+00:00",
   "quotes": [
     {
       "fundId": "sp500",
-      "date": "2026-11-06",
-      "price": 42755,
+      "date": "2026-11-09",
+      "price": 43048,
       "unit": "per10000",
       "source": "SBI証券・公開基準価額一覧（代替）",
       "sourceUrl": "https://site0.sbisec.co.jp/marble/fund/history/standardprice.do?fund_sec_code=03311187",
@@ -13,8 +13,8 @@
     },
     {
       "fundId": "allcountry",
-      "date": "2026-11-06",
-      "price": 36330,
+      "date": "2026-11-09",
+      "price": 36388,
       "unit": "per10000",
       "source": "SBI証券・公開基準価額一覧（代替）",
       "sourceUrl": "https://site0.sbisec.co.jp/marble/fund/history/standardprice.do?fund_sec_code=0331418A",
